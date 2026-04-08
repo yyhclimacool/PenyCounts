@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-penycounts}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-penycounts}
+      POSTGRES_DB: ${POSTGRES_DB:-penycounts}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - penycounts
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override host for Docker network (postgres service hostname)
+      DATABASE_URL: postgres://${POSTGRES_USER:-penycounts}:${POSTGRES_PASSWORD:-penycounts}@postgres:5432/${POSTGRES_DB:-penycounts}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8080"
+    networks:
+      - penycounts
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - penycounts
+
+volumes:
+  postgres_data:
+
+networks:
+  penycounts:
+    driver: bridge

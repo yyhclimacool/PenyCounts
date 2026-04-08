@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1
+
+# =============================================================================
+# Stage 1 — cargo-chef: compute dependency recipe (cached layer boundary)
+# =============================================================================
+FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
+WORKDIR /app
+
+FROM chef AS planner
+COPY backend/Cargo.toml backend/Cargo.lock ./
+COPY backend/src ./src
+RUN cargo chef prepare --recipe-path recipe.json
+
+# =============================================================================
+# Stage 2 — cargo-chef: build dependencies, then compile application
+# =============================================================================
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+
+COPY backend/Cargo.toml backend/Cargo.lock ./
+COPY backend/src ./src
+COPY backend/migrations ./migrations
+RUN cargo build --release --locked
+
+# =============================================================================
+# Stage 3 — minimal runtime
+# =============================================================================
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin penycounts
+
+WORKDIR /app
+
+COPY --from=builder /app/target/release/penycounts-backend /usr/local/bin/penycounts-backend
+COPY --from=builder /app/migrations /app/migrations
+
+USER penycounts
+
+ENV SERVER_HOST=0.0.0.0
+
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/penycounts-backend"]
