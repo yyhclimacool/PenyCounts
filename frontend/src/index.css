@@ -22,6 +22,9 @@
   --color-ring: var(--ring);
   --color-income: var(--income);
   --color-expense: var(--expense);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -86,6 +89,9 @@
   --ring: #6366f1;
   --income: #22c55e;
   --expense: #ef4444;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #334155;
+  --sidebar-accent: #f1f5f9;
   --radius: 0.625rem;
 }
 
@@ -112,6 +118,9 @@
     --ring: #818cf8;
     --income: #4ade80;
     --expense: #f87171;
+    --sidebar: #1e293b;
+    --sidebar-foreground: #cbd5e1;
+    --sidebar-accent: #334155;
   }
 }
 
