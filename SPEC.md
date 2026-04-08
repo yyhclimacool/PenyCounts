@@ -19,23 +19,25 @@ PenyCounts 是一个家庭记账 Web 应用，支持：
 
 ## 2. 技术栈
 
-| 层 | 技术 | 版本 |
-|---|---|---|
-| 前端框架 | React + TypeScript | 19.x + TS 6.x |
-| 构建工具 | Vite | 8.x |
-| CSS | TailwindCSS v4 (`@tailwindcss/vite` 插件) | 4.2 |
-| UI 组件 | shadcn/ui 风格 (Radix UI + CVA) | — |
-| 图表 | Recharts | 3.x |
-| 状态管理 | Zustand | 5.x |
-| HTTP | Axios (REST) + Fetch (SSE 流式) | — |
-| 路由 | react-router | 7.x |
-| 后端框架 | Rust Axum | 0.8 |
-| 数据库驱动 | SQLx (async PostgreSQL) | 0.8 |
-| 数据库 | PostgreSQL | 15 |
-| 认证 | jsonwebtoken (HS256) + Argon2 密码哈希 | — |
-| 邮件 | Lettre SMTP | 0.11 |
-| LLM 代理 | Reqwest (OpenAI-compatible SSE) | 0.12 |
-| 部署 | Docker Compose (3 services) | — |
+
+| 层      | 技术                                      | 版本            |
+| ------ | --------------------------------------- | ------------- |
+| 前端框架   | React + TypeScript                      | 19.x + TS 6.x |
+| 构建工具   | Vite                                    | 8.x           |
+| CSS    | TailwindCSS v4 (`@tailwindcss/vite` 插件) | 4.2           |
+| UI 组件  | shadcn/ui 风格 (Radix UI + CVA)           | —             |
+| 图表     | Recharts                                | 3.x           |
+| 状态管理   | Zustand                                 | 5.x           |
+| HTTP   | Axios (REST) + Fetch (SSE 流式)           | —             |
+| 路由     | react-router                            | 7.x           |
+| 后端框架   | Rust Axum                               | 0.8           |
+| 数据库驱动  | SQLx (async PostgreSQL)                 | 0.8           |
+| 数据库    | PostgreSQL                              | 15            |
+| 认证     | jsonwebtoken (HS256) + Argon2 密码哈希      | —             |
+| 邮件     | Lettre SMTP                             | 0.11          |
+| LLM 代理 | Reqwest (OpenAI-compatible SSE)         | 0.12          |
+| 部署     | Docker Compose (3 services)             | —             |
+
 
 ---
 
@@ -139,102 +141,129 @@ PenyCounts/
 ### 4.1 表结构
 
 #### `users`
-| 列 | 类型 | 约束 |
-|---|---|---|
-| id | UUID | PK, DEFAULT uuid_generate_v4() |
-| email | VARCHAR(255) | UNIQUE NOT NULL |
-| password_hash | VARCHAR(255) | NOT NULL |
-| nickname | VARCHAR(100) | NOT NULL |
-| email_verified | BOOLEAN | DEFAULT FALSE |
-| verification_token | VARCHAR(255) | nullable |
-| created_at | TIMESTAMPTZ | DEFAULT NOW() |
-| updated_at | TIMESTAMPTZ | DEFAULT NOW() |
+
+
+| 列                  | 类型           | 约束                             |
+| ------------------ | ------------ | ------------------------------ |
+| id                 | UUID         | PK, DEFAULT uuid_generate_v4() |
+| email              | VARCHAR(255) | UNIQUE NOT NULL                |
+| password_hash      | VARCHAR(255) | NOT NULL                       |
+| nickname           | VARCHAR(100) | NOT NULL                       |
+| email_verified     | BOOLEAN      | DEFAULT FALSE                  |
+| verification_token | VARCHAR(255) | nullable                       |
+| created_at         | TIMESTAMPTZ  | DEFAULT NOW()                  |
+| updated_at         | TIMESTAMPTZ  | DEFAULT NOW()                  |
+
 
 #### `categories`
-| 列 | 类型 | 约束 |
-|---|---|---|
-| id | UUID | PK |
-| user_id | UUID | FK→users ON DELETE CASCADE, **nullable** (NULL=系统默认) |
-| name | VARCHAR(100) | NOT NULL |
-| type | VARCHAR(10) | CHECK IN ('income', 'expense') |
-| icon | VARCHAR(50) | DEFAULT '📦' |
-| sort_order | INT | DEFAULT 0 |
+
+
+| 列          | 类型           | 约束                                                   |
+| ---------- | ------------ | ---------------------------------------------------- |
+| id         | UUID         | PK                                                   |
+| user_id    | UUID         | FK→users ON DELETE CASCADE, **nullable** (NULL=系统默认) |
+| name       | VARCHAR(100) | NOT NULL                                             |
+| type       | VARCHAR(10)  | CHECK IN ('income', 'expense')                       |
+| icon       | VARCHAR(50)  | DEFAULT '📦'                                         |
+| sort_order | INT          | DEFAULT 0                                            |
+
 
 #### `subcategories`
-| 列 | 类型 | 约束 |
-|---|---|---|
-| id | UUID | PK |
-| category_id | UUID | FK→categories ON DELETE CASCADE |
-| user_id | UUID | FK→users ON DELETE CASCADE, **nullable** |
-| name | VARCHAR(100) | NOT NULL |
-| icon | VARCHAR(50) | DEFAULT '📎' |
-| sort_order | INT | DEFAULT 0 |
+
+
+| 列           | 类型           | 约束                                       |
+| ----------- | ------------ | ---------------------------------------- |
+| id          | UUID         | PK                                       |
+| category_id | UUID         | FK→categories ON DELETE CASCADE          |
+| user_id     | UUID         | FK→users ON DELETE CASCADE, **nullable** |
+| name        | VARCHAR(100) | NOT NULL                                 |
+| icon        | VARCHAR(50)  | DEFAULT '📎'                             |
+| sort_order  | INT          | DEFAULT 0                                |
+
 
 #### `transactions`
-| 列 | 类型 | 约束 |
-|---|---|---|
-| id | UUID | PK |
-| user_id | UUID | FK→users ON DELETE CASCADE |
-| category_id | UUID | FK→categories |
-| subcategory_id | UUID | FK→subcategories, nullable |
-| type | VARCHAR(10) | CHECK IN ('income', 'expense') |
-| amount | NUMERIC(15,2) | NOT NULL |
-| currency | VARCHAR(10) | DEFAULT 'CNY' |
-| date | DATE | NOT NULL |
-| time | TIME | DEFAULT '00:00:00' |
-| location | VARCHAR(255) | nullable |
-| note | TEXT | nullable |
-| created_at | TIMESTAMPTZ | DEFAULT NOW() |
+
+
+| 列              | 类型            | 约束                             |
+| -------------- | ------------- | ------------------------------ |
+| id             | UUID          | PK                             |
+| user_id        | UUID          | FK→users ON DELETE CASCADE     |
+| category_id    | UUID          | FK→categories                  |
+| subcategory_id | UUID          | FK→subcategories, nullable     |
+| type           | VARCHAR(10)   | CHECK IN ('income', 'expense') |
+| amount         | NUMERIC(15,2) | NOT NULL                       |
+| currency       | VARCHAR(10)   | DEFAULT 'CNY'                  |
+| date           | DATE          | NOT NULL                       |
+| time           | TIME          | DEFAULT '00:00:00'             |
+| location       | VARCHAR(255)  | nullable                       |
+| note           | TEXT          | nullable                       |
+| created_at     | TIMESTAMPTZ   | DEFAULT NOW()                  |
+
 
 #### `transaction_members`
-| 列 | 类型 | 约束 |
-|---|---|---|
-| id | UUID | PK |
-| transaction_id | UUID | FK→transactions ON DELETE CASCADE |
-| member_name | VARCHAR(100) | NOT NULL |
-| share_amount | NUMERIC(15,2) | NOT NULL |
+
+
+| 列              | 类型            | 约束                                |
+| -------------- | ------------- | --------------------------------- |
+| id             | UUID          | PK                                |
+| transaction_id | UUID          | FK→transactions ON DELETE CASCADE |
+| member_name    | VARCHAR(100)  | NOT NULL                          |
+| share_amount   | NUMERIC(15,2) | NOT NULL                          |
+
 
 #### `members`
-| 列 | 类型 | 约束 |
-|---|---|---|
-| id | UUID | PK |
-| user_id | UUID | FK→users ON DELETE CASCADE |
-| name | VARCHAR(100) | NOT NULL |
+
+
+| 列       | 类型           | 约束                         |
+| ------- | ------------ | -------------------------- |
+| id      | UUID         | PK                         |
+| user_id | UUID         | FK→users ON DELETE CASCADE |
+| name    | VARCHAR(100) | NOT NULL                   |
+
 
 #### `social_gifts`
-| 列 | 类型 | 约束 |
-|---|---|---|
-| id | UUID | PK |
-| user_id | UUID | FK→users ON DELETE CASCADE |
-| type | VARCHAR(10) | CHECK IN ('give', 'receive') |
-| person_name | VARCHAR(100) | NOT NULL |
-| relation | VARCHAR(100) | nullable |
-| occasion | VARCHAR(255) | NOT NULL |
-| amount | NUMERIC(15,2) | NOT NULL |
-| currency | VARCHAR(10) | DEFAULT 'CNY' |
-| date | DATE | NOT NULL |
-| note | TEXT | nullable |
-| created_at | TIMESTAMPTZ | DEFAULT NOW() |
+
+
+| 列           | 类型            | 约束                           |
+| ----------- | ------------- | ---------------------------- |
+| id          | UUID          | PK                           |
+| user_id     | UUID          | FK→users ON DELETE CASCADE   |
+| type        | VARCHAR(10)   | CHECK IN ('give', 'receive') |
+| person_name | VARCHAR(100)  | NOT NULL                     |
+| relation    | VARCHAR(100)  | nullable                     |
+| occasion    | VARCHAR(255)  | NOT NULL                     |
+| amount      | NUMERIC(15,2) | NOT NULL                     |
+| currency    | VARCHAR(10)   | DEFAULT 'CNY'                |
+| date        | DATE          | NOT NULL                     |
+| note        | TEXT          | nullable                     |
+| created_at  | TIMESTAMPTZ   | DEFAULT NOW()                |
+
 
 #### `llm_configs`
-| 列 | 类型 | 约束 |
-|---|---|---|
-| id | UUID | PK |
-| user_id | UUID | FK→users ON DELETE CASCADE |
-| provider | VARCHAR(50) | NOT NULL |
-| api_url | VARCHAR(500) | NOT NULL |
-| api_key | VARCHAR(500) | nullable |
-| model_name | VARCHAR(100) | NOT NULL |
-| is_active | BOOLEAN | DEFAULT TRUE |
+
+
+| 列          | 类型           | 约束                         |
+| ---------- | ------------ | -------------------------- |
+| id         | UUID         | PK                         |
+| user_id    | UUID         | FK→users ON DELETE CASCADE |
+| provider   | VARCHAR(50)  | NOT NULL                   |
+| api_url    | VARCHAR(500) | NOT NULL                   |
+| api_key    | VARCHAR(500) | nullable                   |
+| model_name | VARCHAR(100) | NOT NULL                   |
+| is_active  | BOOLEAN      | DEFAULT TRUE               |
+
 
 #### `chat_messages`
-| 列 | 类型 | 约束 |
-|---|---|---|
-| id | UUID | PK |
-| user_id | UUID | FK→users ON DELETE CASCADE |
-| role | VARCHAR(20) | CHECK IN ('user', 'assistant') |
-| content | TEXT | NOT NULL |
-| created_at | TIMESTAMPTZ | DEFAULT NOW() |
+
+
+| 列          | 类型          | 约束                             |
+| ---------- | ----------- | ------------------------------ |
+| id         | UUID        | PK                             |
+| user_id    | UUID        | FK→users ON DELETE CASCADE     |
+| role       | VARCHAR(20) | CHECK IN ('user', 'assistant') |
+| content    | TEXT        | NOT NULL                       |
+| created_at | TIMESTAMPTZ | DEFAULT NOW()                  |
+
 
 ### 4.2 索引
 
@@ -255,7 +284,7 @@ PenyCounts/
 ### 5.1 全局约定
 
 - **Base path:** `/api`
-- **认证:** 除 `/api/auth/*` 和 `/api/health` 外，所有端点需 `Authorization: Bearer <JWT>` header
+- **认证:** 除 `/api/auth/`* 和 `/api/health` 外，所有端点需 `Authorization: Bearer <JWT>` header
 - **错误响应:** `{ "error": "message" }` + 对应 HTTP status (400/401/403/404/422/500)
 - **分页:** 支持 `page` + `per_page` 查询参数，返回 `PaginatedResponse { data, total, page, per_page }`
 - **ID 格式:** UUID v4
@@ -265,89 +294,105 @@ PenyCounts/
 
 #### 认证 (public)
 
-| 方法 | 路径 | Handler | 请求体/参数 | 响应 |
-|---|---|---|---|---|
-| POST | /api/auth/register | auth::register | `{ email, password, nickname }` | 201 `UserResponse` |
-| POST | /api/auth/login | auth::login | `{ email, password }` | 200 `AuthResponse { token, user }` |
-| GET | /api/auth/verify-email | auth::verify_email | `?token=xxx` | 200 `{ message }` |
-| POST | /api/auth/forgot-password | auth::forgot_password | `{ email }` | 200 `{ message }` |
-| POST | /api/auth/reset-password | auth::reset_password | `{ token, new_password }` | 200 `{ message }` |
+
+| 方法   | 路径                        | Handler               | 请求体/参数                          | 响应                                 |
+| ---- | ------------------------- | --------------------- | ------------------------------- | ---------------------------------- |
+| POST | /api/auth/register        | auth::register        | `{ email, password, nickname }` | 201 `UserResponse`                 |
+| POST | /api/auth/login           | auth::login           | `{ email, password }`           | 200 `AuthResponse { token, user }` |
+| GET  | /api/auth/verify-email    | auth::verify_email    | `?token=xxx`                    | 200 `{ message }`                  |
+| POST | /api/auth/forgot-password | auth::forgot_password | `{ email }`                     | 200 `{ message }`                  |
+| POST | /api/auth/reset-password  | auth::reset_password  | `{ token, new_password }`       | 200 `{ message }`                  |
+
 
 #### 分类 (需认证)
 
-| 方法 | 路径 | Handler | 说明 |
-|---|---|---|---|
-| GET | /api/categories | categories::list_categories | 返回系统默认 + 用户自定义分类 |
-| POST | /api/categories | categories::create_category | `{ name, type, icon }` |
-| GET | /api/categories/{id} | categories::get_category | |
-| PUT | /api/categories/{id} | categories::update_category | 系统默认分类禁止修改 |
-| DELETE | /api/categories/{id} | categories::delete_category | 系统默认分类禁止删除 |
-| GET | /api/categories/{category_id}/subcategories | categories::list_subcategories | |
-| POST | /api/categories/{category_id}/subcategories | categories::create_subcategory | `{ name, icon }` |
-| PUT | /api/subcategories/{id} | categories::update_subcategory | |
-| DELETE | /api/subcategories/{id} | categories::delete_subcategory | |
+
+| 方法     | 路径                                          | Handler                        | 说明                     |
+| ------ | ------------------------------------------- | ------------------------------ | ---------------------- |
+| GET    | /api/categories                             | categories::list_categories    | 返回系统默认 + 用户自定义分类       |
+| POST   | /api/categories                             | categories::create_category    | `{ name, type, icon }` |
+| GET    | /api/categories/{id}                        | categories::get_category       |                        |
+| PUT    | /api/categories/{id}                        | categories::update_category    | 系统默认分类禁止修改             |
+| DELETE | /api/categories/{id}                        | categories::delete_category    | 系统默认分类禁止删除             |
+| GET    | /api/categories/{category_id}/subcategories | categories::list_subcategories |                        |
+| POST   | /api/categories/{category_id}/subcategories | categories::create_subcategory | `{ name, icon }`       |
+| PUT    | /api/subcategories/{id}                     | categories::update_subcategory |                        |
+| DELETE | /api/subcategories/{id}                     | categories::delete_subcategory |                        |
+
 
 #### 交易 (需认证)
 
-| 方法 | 路径 | Handler | 说明 |
-|---|---|---|---|
-| GET | /api/transactions | transactions::list_transactions | 查询: `start_date, end_date, category_id, type, search, page, per_page` |
-| POST | /api/transactions | transactions::create_transaction | `{ category_id, subcategory_id?, type, amount, currency, date, time, location?, note?, members?: string[] }` |
-| GET | /api/transactions/{id} | transactions::get_transaction | |
-| PUT | /api/transactions/{id} | transactions::update_transaction | 同 create 请求体 |
-| DELETE | /api/transactions/{id} | transactions::delete_transaction | |
-| GET | /api/transactions/{id}/members | transactions::get_transaction_members | |
+
+| 方法     | 路径                             | Handler                               | 说明                                                                                                           |
+| ------ | ------------------------------ | ------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| GET    | /api/transactions              | transactions::list_transactions       | 查询: `start_date, end_date, category_id, type, search, page, per_page`                                        |
+| POST   | /api/transactions              | transactions::create_transaction      | `{ category_id, subcategory_id?, type, amount, currency, date, time, location?, note?, members?: string[] }` |
+| GET    | /api/transactions/{id}         | transactions::get_transaction         |                                                                                                              |
+| PUT    | /api/transactions/{id}         | transactions::update_transaction      | 同 create 请求体                                                                                                 |
+| DELETE | /api/transactions/{id}         | transactions::delete_transaction      |                                                                                                              |
+| GET    | /api/transactions/{id}/members | transactions::get_transaction_members |                                                                                                              |
+
 
 > **分摊逻辑:** 创建/更新交易时，若 `members` 非空，`share_amount = amount / members.len()`
 
 #### 成员 (需认证)
 
-| 方法 | 路径 | Handler |
-|---|---|---|
-| GET | /api/members | members::list_members |
-| POST | /api/members | members::create_member |
-| GET | /api/members/{id} | members::get_member |
-| PUT | /api/members/{id} | members::update_member |
+
+| 方法     | 路径                | Handler                |
+| ------ | ----------------- | ---------------------- |
+| GET    | /api/members      | members::list_members  |
+| POST   | /api/members      | members::create_member |
+| GET    | /api/members/{id} | members::get_member    |
+| PUT    | /api/members/{id} | members::update_member |
 | DELETE | /api/members/{id} | members::delete_member |
+
 
 #### 人情往来 (需认证)
 
-| 方法 | 路径 | Handler | 说明 |
-|---|---|---|---|
-| GET | /api/social-gifts | social_gifts::list_social_gifts | 查询: `type, person_name, year, page, per_page` |
-| POST | /api/social-gifts | social_gifts::create_social_gift | `{ type(give/receive), person_name, relation?, occasion, amount, currency, date, note? }` |
-| GET | /api/social-gifts/{id} | social_gifts::get_social_gift | |
-| PUT | /api/social-gifts/{id} | social_gifts::update_social_gift | |
-| DELETE | /api/social-gifts/{id} | social_gifts::delete_social_gift | |
+
+| 方法     | 路径                     | Handler                          | 说明                                                                                        |
+| ------ | ---------------------- | -------------------------------- | ----------------------------------------------------------------------------------------- |
+| GET    | /api/social-gifts      | social_gifts::list_social_gifts  | 查询: `type, person_name, year, page, per_page`                                             |
+| POST   | /api/social-gifts      | social_gifts::create_social_gift | `{ type(give/receive), person_name, relation?, occasion, amount, currency, date, note? }` |
+| GET    | /api/social-gifts/{id} | social_gifts::get_social_gift    |                                                                                           |
+| PUT    | /api/social-gifts/{id} | social_gifts::update_social_gift |                                                                                           |
+| DELETE | /api/social-gifts/{id} | social_gifts::delete_social_gift |                                                                                           |
+
 
 #### 统计 (需认证)
 
-| 方法 | 路径 | Handler | 查询参数 | 响应类型 |
-|---|---|---|---|---|
-| GET | /api/stats/monthly-trend | stats::monthly_trend | `year` | `MonthlyTrendItem[]` |
-| GET | /api/stats/monthly-detail | stats::monthly_detail | `year, month` | `Transaction[]` |
+
+| 方法  | 路径                            | Handler                   | 查询参数                          | 响应类型                  |
+| --- | ----------------------------- | ------------------------- | ----------------------------- | --------------------- |
+| GET | /api/stats/monthly-trend      | stats::monthly_trend      | `year`                        | `MonthlyTrendItem[]`  |
+| GET | /api/stats/monthly-detail     | stats::monthly_detail     | `year, month`                 | `Transaction[]`       |
 | GET | /api/stats/category-breakdown | stats::category_breakdown | `start_date, end_date, type?` | `CategoryBreakdown[]` |
-| GET | /api/stats/member-breakdown | stats::member_breakdown | `start_date, end_date` | `MemberBreakdown[]` |
-| GET | /api/stats/social-summary | stats::social_summary | `year` | `SocialSummary[]` |
+| GET | /api/stats/member-breakdown   | stats::member_breakdown   | `start_date, end_date`        | `MemberBreakdown[]`   |
+| GET | /api/stats/social-summary     | stats::social_summary     | `year`                        | `SocialSummary[]`     |
+
 
 #### AI (需认证)
 
-| 方法 | 路径 | Handler | 说明 |
-|---|---|---|---|
-| GET | /api/ai/configs | ai::list_configs | 当前用户的 LLM 配置列表 |
-| POST | /api/ai/configs | ai::create_config | 创建并自动激活 |
-| PUT | /api/ai/configs/{id} | ai::update_config | |
-| DELETE | /api/ai/configs/{id} | ai::delete_config | |
-| POST | /api/ai/configs/{id}/activate | ai::activate_config | 停用其他、激活此配置 |
-| POST | /api/ai/chat | ai::chat | `{ message }` → SSE 流 |
-| GET | /api/ai/chat/history | ai::chat_history | |
-| DELETE | /api/ai/chat/history | ai::clear_history | |
+
+| 方法     | 路径                            | Handler             | 说明                    |
+| ------ | ----------------------------- | ------------------- | --------------------- |
+| GET    | /api/ai/configs               | ai::list_configs    | 当前用户的 LLM 配置列表        |
+| POST   | /api/ai/configs               | ai::create_config   | 创建并自动激活               |
+| PUT    | /api/ai/configs/{id}          | ai::update_config   |                       |
+| DELETE | /api/ai/configs/{id}          | ai::delete_config   |                       |
+| POST   | /api/ai/configs/{id}/activate | ai::activate_config | 停用其他、激活此配置            |
+| POST   | /api/ai/chat                  | ai::chat            | `{ message }` → SSE 流 |
+| GET    | /api/ai/chat/history          | ai::chat_history    |                       |
+| DELETE | /api/ai/chat/history          | ai::clear_history   |                       |
+
 
 #### 健康检查
 
-| 方法 | 路径 | 响应 |
-|---|---|---|
+
+| 方法  | 路径          | 响应     |
+| --- | ----------- | ------ |
 | GET | /api/health | `"ok"` |
+
 
 ### 5.3 SSE 聊天协议
 
@@ -374,35 +419,40 @@ data: [DONE]
 
 ### 6.1 路由表
 
-| 路径 | 页面 | 鉴权 | 布局 |
-|---|---|---|---|
-| /login | LoginPage | RedirectIfAuth | 无 (全屏) |
-| /register | RegisterPage | RedirectIfAuth | 无 |
-| /verify-email | VerifyEmailPage | 无 | 无 |
-| /forgot-password | ForgotPasswordPage | RedirectIfAuth | 无 |
-| /reset-password | ResetPasswordPage | RedirectIfAuth | 无 |
-| / | DashboardPage | RequireAuth | AppLayout |
-| /transactions | TransactionsPage | RequireAuth | AppLayout |
-| /social-gifts | SocialGiftsPage | RequireAuth | AppLayout |
-| /categories | CategoriesPage | RequireAuth | AppLayout |
-| /statistics | StatisticsPage | RequireAuth | AppLayout |
-| /settings | SettingsPage | RequireAuth | AppLayout |
+
+| 路径               | 页面                 | 鉴权             | 布局        |
+| ---------------- | ------------------ | -------------- | --------- |
+| /login           | LoginPage          | RedirectIfAuth | 无 (全屏)    |
+| /register        | RegisterPage       | RedirectIfAuth | 无         |
+| /verify-email    | VerifyEmailPage    | 无              | 无         |
+| /forgot-password | ForgotPasswordPage | RedirectIfAuth | 无         |
+| /reset-password  | ResetPasswordPage  | RedirectIfAuth | 无         |
+| /                | DashboardPage      | RequireAuth    | AppLayout |
+| /transactions    | TransactionsPage   | RequireAuth    | AppLayout |
+| /social-gifts    | SocialGiftsPage    | RequireAuth    | AppLayout |
+| /categories      | CategoriesPage     | RequireAuth    | AppLayout |
+| /statistics      | StatisticsPage     | RequireAuth    | AppLayout |
+| /settings        | SettingsPage       | RequireAuth    | AppLayout |
+
 
 所有受保护页面使用 `React.lazy()` + `Suspense` 实现代码分割。
 
 ### 6.2 状态管理
 
 **authStore** (`stores/authStore.ts`)
+
 - State: `user: User | null`, `token: string | null`, `isAuthenticated: boolean`
 - Actions: `login(token, user)`, `logout()`, `setUser(user)`
 - 持久化: token 存入 `localStorage` key `penycounts_token`
 
 **chatStore** (`stores/chatStore.ts`)
+
 - State: `messages: ChatMessageUI[]`, `isOpen: boolean`, `isLoading: boolean`, `historyLoaded: boolean`
 - Actions: `setOpen(open)`, `sendMessage(text)`, `loadHistory()`, `clearMessages()`
 - `ChatMessageUI` 扩展 `ChatMessage`，增加 `isStreaming?: boolean`
 
 **useToast** (`hooks/useToast.ts`)
+
 - Zustand store: `toasts: Toast[]`
 - Actions: `addToast(toast)` / `toast(toast)`, `dismiss(id)` / `removeToast(id)`
 - 自动 4 秒消失
@@ -418,20 +468,22 @@ data: [DONE]
 
 基于 shadcn/ui 模式，位于 `components/ui/`:
 
-| 组件 | 文件 | 底层 |
-|---|---|---|
-| Button | button.tsx | CVA + @radix-ui/react-slot |
-| Input | input.tsx | forwardRef |
-| Textarea | textarea.tsx | forwardRef |
-| Label | label.tsx | @radix-ui/react-label |
-| Card | card.tsx | div 组合 |
-| Dialog | dialog.tsx | @radix-ui/react-dialog |
-| Select | select.tsx | @radix-ui/react-select |
-| Tabs | tabs.tsx | @radix-ui/react-tabs |
-| Badge | badge.tsx | CVA |
-| Separator | separator.tsx | @radix-ui/react-separator |
-| Toast | toast.tsx | 自定义 + Zustand |
-| Toaster (unused) | toaster.tsx | 旧版，未接入 |
+
+| 组件               | 文件            | 底层                         |
+| ---------------- | ------------- | -------------------------- |
+| Button           | button.tsx    | CVA + @radix-ui/react-slot |
+| Input            | input.tsx     | forwardRef                 |
+| Textarea         | textarea.tsx  | forwardRef                 |
+| Label            | label.tsx     | @radix-ui/react-label      |
+| Card             | card.tsx      | div 组合                     |
+| Dialog           | dialog.tsx    | @radix-ui/react-dialog     |
+| Select           | select.tsx    | @radix-ui/react-select     |
+| Tabs             | tabs.tsx      | @radix-ui/react-tabs       |
+| Badge            | badge.tsx     | CVA                        |
+| Separator        | separator.tsx | @radix-ui/react-separator  |
+| Toast            | toast.tsx     | 自定义 + Zustand              |
+| Toaster (unused) | toaster.tsx   | 旧版，未接入                     |
+
 
 ### 6.5 TailwindCSS v4 主题
 
@@ -439,23 +491,25 @@ data: [DONE]
 
 **语义色彩 token (可用作 TW 类如 `bg-primary`, `text-muted-foreground`):**
 
-| Token | 亮色 | 暗色 | 用途 |
-|---|---|---|---|
-| background | #f8fafc | #0f172a | 页面背景 |
-| foreground | #0f172a | #f8fafc | 主文字 |
-| card | #ffffff | #1e293b | 卡片背景 |
-| primary | #6366f1 | #818cf8 | 主题色 (indigo) |
-| secondary | #f1f5f9 | #334155 | 次要背景 |
-| muted | #f1f5f9 | #334155 | 弱化元素 |
-| muted-foreground | #64748b | #94a3b8 | 弱化文字 |
-| destructive | #ef4444 | #dc2626 | 危险操作 |
-| border | #e2e8f0 | #334155 | 边框 |
-| ring | #6366f1 | #818cf8 | 聚焦环 |
-| income | #22c55e | #4ade80 | 收入 (绿) |
-| expense | #ef4444 | #f87171 | 支出 (红) |
-| sidebar | #ffffff | #1e293b | 侧边栏背景 |
-| sidebar-foreground | #334155 | #cbd5e1 | 侧边栏文字 |
-| sidebar-accent | #f1f5f9 | #334155 | 侧边栏高亮 |
+
+| Token              | 亮色      | 暗色      | 用途           |
+| ------------------ | ------- | ------- | ------------ |
+| background         | #f8fafc | #0f172a | 页面背景         |
+| foreground         | #0f172a | #f8fafc | 主文字          |
+| card               | #ffffff | #1e293b | 卡片背景         |
+| primary            | #6366f1 | #818cf8 | 主题色 (indigo) |
+| secondary          | #f1f5f9 | #334155 | 次要背景         |
+| muted              | #f1f5f9 | #334155 | 弱化元素         |
+| muted-foreground   | #64748b | #94a3b8 | 弱化文字         |
+| destructive        | #ef4444 | #dc2626 | 危险操作         |
+| border             | #e2e8f0 | #334155 | 边框           |
+| ring               | #6366f1 | #818cf8 | 聚焦环          |
+| income             | #22c55e | #4ade80 | 收入 (绿)       |
+| expense            | #ef4444 | #f87171 | 支出 (红)       |
+| sidebar            | #ffffff | #1e293b | 侧边栏背景        |
+| sidebar-foreground | #334155 | #cbd5e1 | 侧边栏文字        |
+| sidebar-accent     | #f1f5f9 | #334155 | 侧边栏高亮        |
+
 
 **圆角:** `--radius: 0.625rem`，派生 `sm/md/lg/xl`。
 
@@ -469,28 +523,32 @@ data: [DONE]
 
 ### 7.1 后端 (`.env` / docker-compose)
 
-| 变量 | 必填 | 默认 | 说明 |
-|---|---|---|---|
-| DATABASE_URL | 是 | — | PostgreSQL 连接串 |
-| JWT_SECRET | 是 | — | JWT 签名密钥 |
-| JWT_EXPIRY_HOURS | 否 | 72 | Token 有效时长 |
-| SMTP_HOST | 是 | — | SMTP 服务器 |
-| SMTP_PORT | 否 | 587 | SMTP 端口 |
-| SMTP_USERNAME | 是 | — | SMTP 用户名 |
-| SMTP_PASSWORD | 是 | — | SMTP 密码/授权码 |
-| SMTP_FROM | 是 | — | 发件人地址 |
-| SERVER_HOST | 否 | 0.0.0.0 | 监听地址 |
-| SERVER_PORT | 否 | 8080 | 监听端口 |
-| FRONTEND_URL | 是 | — | 前端地址 (CORS + 邮件链接) |
-| POSTGRES_USER | 否 | penycounts | Docker Compose 用 |
-| POSTGRES_PASSWORD | 否 | penycounts | Docker Compose 用 |
-| POSTGRES_DB | 否 | penycounts | Docker Compose 用 |
+
+| 变量                | 必填  | 默认         | 说明                 |
+| ----------------- | --- | ---------- | ------------------ |
+| DATABASE_URL      | 是   | —          | PostgreSQL 连接串     |
+| JWT_SECRET        | 是   | —          | JWT 签名密钥           |
+| JWT_EXPIRY_HOURS  | 否   | 72         | Token 有效时长         |
+| SMTP_HOST         | 是   | —          | SMTP 服务器           |
+| SMTP_PORT         | 否   | 587        | SMTP 端口            |
+| SMTP_USERNAME     | 是   | —          | SMTP 用户名           |
+| SMTP_PASSWORD     | 是   | —          | SMTP 密码/授权码        |
+| SMTP_FROM         | 是   | —          | 发件人地址              |
+| SERVER_HOST       | 否   | 0.0.0.0    | 监听地址               |
+| SERVER_PORT       | 否   | 8080       | 监听端口               |
+| FRONTEND_URL      | 是   | —          | 前端地址 (CORS + 邮件链接) |
+| POSTGRES_USER     | 否   | penycounts | Docker Compose 用   |
+| POSTGRES_PASSWORD | 否   | penycounts | Docker Compose 用   |
+| POSTGRES_DB       | 否   | penycounts | Docker Compose 用   |
+
 
 ### 7.2 前端 (Vite 环境变量)
 
-| 变量 | 默认 | 说明 |
-|---|---|---|
+
+| 变量           | 默认   | 说明           |
+| ------------ | ---- | ------------ |
 | VITE_API_URL | /api | API Base URL |
+
 
 ---
 
@@ -574,3 +632,4 @@ cd frontend && npx tsc --noEmit && npm run build
 5. **通知**: 无预算超支提醒
 6. **AI Tool Calling**: 后端已定义 `create_transaction` / `query_transactions` tools，但 tool call 结果尚未自动执行入库（需前端确认流程）
 7. **toaster.tsx**: `components/ui/toaster.tsx` 是旧版未使用的 Toast 组件，可删除
+
