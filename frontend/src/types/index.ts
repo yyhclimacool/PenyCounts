@@ -107,6 +107,18 @@ export interface MemberBreakdown {
   total: string;
 }
 
+export interface DailyTrend {
+  day: number;
+  income: string;
+  expense: string;
+}
+
+export interface YearlyTrend {
+  year: number;
+  income: string;
+  expense: string;
+}
+
 export interface SocialSummary {
   person_name: string;
   given: string;

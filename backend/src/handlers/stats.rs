@@ -7,8 +7,9 @@ use crate::config::AppState;
 use crate::errors::AppError;
 use crate::middleware::AuthUser;
 use crate::models::{
-    CategoryBreakdown, MemberBreakdown, MonthlyTrendItem, SocialSummary,
+    CategoryBreakdown, DailyTrendItem, MemberBreakdown, MonthlyTrendItem, SocialSummary,
     StatsBreakdownQuery, StatsMemberQuery, StatsYearMonthQuery, StatsYearQuery, Transaction,
+    YearlyTrendItem,
 };
 use crate::services;
 
@@ -74,6 +75,7 @@ pub async fn member_breakdown(
         user_id = %auth.user_id,
         year = query.year,
         month = ?query.month,
+        r#type = ?query.r#type,
         "member_breakdown: received request"
     );
     let data = services::stats::member_breakdown(
@@ -81,6 +83,7 @@ pub async fn member_breakdown(
         auth.user_id,
         query.year,
         query.month,
+        query.r#type.as_deref(),
     )
     .await?;
     tracing::debug!(user_id = %auth.user_id, members = data.len(), "member_breakdown: returning data");
@@ -96,5 +99,32 @@ pub async fn social_summary(
     let data =
         services::stats::social_summary(&state.pool, auth.user_id, query.year).await?;
     tracing::debug!(user_id = %auth.user_id, rows = data.len(), "social_summary: returning data");
+    Ok(Json(data))
+}
+
+pub async fn daily_trend(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(query): Query<StatsYearMonthQuery>,
+) -> Result<Json<Vec<DailyTrendItem>>, AppError> {
+    tracing::debug!(user_id = %auth.user_id, year = query.year, month = query.month, "daily_trend: received request");
+    let data = services::stats::daily_trend(
+        &state.pool,
+        auth.user_id,
+        query.year,
+        query.month,
+    )
+    .await?;
+    tracing::debug!(user_id = %auth.user_id, rows = data.len(), "daily_trend: returning data");
+    Ok(Json(data))
+}
+
+pub async fn yearly_trend(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<YearlyTrendItem>>, AppError> {
+    tracing::debug!(user_id = %auth.user_id, "yearly_trend: received request");
+    let data = services::stats::yearly_trend(&state.pool, auth.user_id).await?;
+    tracing::debug!(user_id = %auth.user_id, rows = data.len(), "yearly_trend: returning data");
     Ok(Json(data))
 }

@@ -247,6 +247,7 @@ pub struct StatsBreakdownQuery {
 pub struct StatsMemberQuery {
     pub year: i32,
     pub month: Option<u32>,
+    pub r#type: Option<String>,
 }
 
 // ── Response DTOs ────────────────────────────────────────────────────
@@ -299,6 +300,20 @@ pub struct SocialSummary {
     pub given: Decimal,
     pub received: Decimal,
     pub net: Decimal,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct DailyTrendItem {
+    pub day: i32,
+    pub income: Decimal,
+    pub expense: Decimal,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct YearlyTrendItem {
+    pub year: i32,
+    pub income: Decimal,
+    pub expense: Decimal,
 }
 
 impl UserResponse {

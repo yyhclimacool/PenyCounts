@@ -137,6 +137,14 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
             "/api/stats/social-summary",
             axum::routing::get(stats::social_summary),
         )
+        .route(
+            "/api/stats/daily-trend",
+            axum::routing::get(stats::daily_trend),
+        )
+        .route(
+            "/api/stats/yearly-trend",
+            axum::routing::get(stats::yearly_trend),
+        )
         // AI
         .route(
             "/api/ai/config",

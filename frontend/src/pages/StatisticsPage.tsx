@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import dayjs from 'dayjs';
 import {
   ChevronLeft,
@@ -7,8 +7,8 @@ import {
   TrendingUp,
   TrendingDown,
   PiggyBank,
-  X,
   BarChart3,
+  CalendarDays,
 } from 'lucide-react';
 import {
   LineChart,
@@ -22,8 +22,11 @@ import {
   PieChart,
   Pie,
   Cell,
+  Sector,
   BarChart,
   Bar,
+  AreaChart,
+  Area,
 } from 'recharts';
 import {
   Card,
@@ -38,7 +41,6 @@ import {
   TabsContent,
 } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
 import {
   Select,
   SelectContent,
@@ -49,17 +51,17 @@ import {
 import * as statsService from '@/services/stats';
 import type {
   MonthlyTrend,
-  Transaction,
   CategoryBreakdown,
   MemberBreakdown,
   SocialSummary,
+  DailyTrend,
+  YearlyTrend,
 } from '@/types';
-import { formatCurrency, formatDate } from '@/utils/format';
+import { formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
 
 const INCOME_COLOR = '#10B981';
 const EXPENSE_COLOR = '#EF4444';
-const PRIMARY_COLOR = '#0062FF';
 
 const CATEGORY_PALETTE = [
   '#0062FF', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981',
@@ -73,6 +75,10 @@ function formatYAxis(value: number): string {
   if (Math.abs(value) >= 10000) return `${(value / 10000).toFixed(1)}万`;
   if (Math.abs(value) >= 1000) return `${(value / 1000).toFixed(1)}k`;
   return String(value);
+}
+
+function daysInMonth(year: number, month: number): number {
+  return new Date(year, month, 0).getDate();
 }
 
 /* ------------------------------------------------------------------ */
@@ -115,9 +121,11 @@ function YearSelector({
 function MonthSelect({
   value,
   onChange,
+  allowAll = true,
 }: {
   value: string;
   onChange: (v: string) => void;
+  allowAll?: boolean;
 }) {
   return (
     <Select value={value} onValueChange={onChange}>
@@ -125,7 +133,7 @@ function MonthSelect({
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="all">全部月份</SelectItem>
+        {allowAll && <SelectItem value="all">全部月份</SelectItem>}
         {MONTHS.map((m) => (
           <SelectItem key={m} value={String(m)}>
             {m}月
@@ -179,104 +187,358 @@ function ChartTooltip({ active, payload, label }: any) {
 }
 
 /* ================================================================== */
-/*  Tab 1 — Monthly Trend                                              */
+/*  Tab 1 — Overview / Summary Analysis                                */
 /* ================================================================== */
 
-function MonthlyTrendTab() {
-  const [year, setYear] = useState(dayjs().year());
-  const [trend, setTrend] = useState<MonthlyTrend[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedMonth, setSelectedMonth] = useState<number | null>(null);
-  const [detail, setDetail] = useState<Transaction[]>([]);
-  const [detailLoading, setDetailLoading] = useState(false);
+function TypeToggle({
+  value,
+  onChange,
+}: {
+  value: 'all' | 'expense' | 'income';
+  onChange: (v: 'all' | 'expense' | 'income') => void;
+}) {
+  return (
+    <div className="flex rounded-lg border p-0.5">
+      <Button
+        variant={value === 'all' ? 'default' : 'ghost'}
+        size="sm"
+        className={cn('h-7 text-xs', value === 'all' && 'bg-primary hover:bg-primary/90')}
+        onClick={() => onChange('all')}
+      >
+        全部
+      </Button>
+      <Button
+        variant={value === 'expense' ? 'default' : 'ghost'}
+        size="sm"
+        className={cn('h-7 text-xs', value === 'expense' && 'bg-expense hover:bg-expense/90')}
+        onClick={() => onChange('expense')}
+      >
+        支出
+      </Button>
+      <Button
+        variant={value === 'income' ? 'default' : 'ghost'}
+        size="sm"
+        className={cn('h-7 text-xs', value === 'income' && 'bg-income hover:bg-income/90')}
+        onClick={() => onChange('income')}
+      >
+        收入
+      </Button>
+    </div>
+  );
+}
 
-  const fetchTrend = useCallback(async (y: number) => {
-    setLoading(true);
-    setSelectedMonth(null);
-    try {
-      const data = await statsService.monthlyTrend({ year: y });
-      setTrend(data);
-    } catch {
-      setTrend([]);
-    } finally {
-      setLoading(false);
-    }
+function OverviewTab() {
+  const currentYear = dayjs().year();
+  const currentMonth = dayjs().month() + 1;
+
+  const [year, setYear] = useState(currentYear);
+  const [viewType, setViewType] = useState<'all' | 'expense' | 'income'>('all');
+  const [monthlyData, setMonthlyData] = useState<MonthlyTrend[]>([]);
+  const [monthlyLoading, setMonthlyLoading] = useState(true);
+
+  const [selectedMonth, setSelectedMonth] = useState(String(currentMonth));
+  const [dailyData, setDailyData] = useState<DailyTrend[]>([]);
+  const [dailyLoading, setDailyLoading] = useState(true);
+
+  const [yearlyData, setYearlyData] = useState<YearlyTrend[]>([]);
+  const [yearlyLoading, setYearlyLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setMonthlyLoading(true);
+    statsService
+      .monthlyTrend({ year })
+      .then((d) => !cancelled && setMonthlyData(d))
+      .catch(() => !cancelled && setMonthlyData([]))
+      .finally(() => !cancelled && setMonthlyLoading(false));
+    return () => { cancelled = true; };
+  }, [year]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDailyLoading(true);
+    const m = Number(selectedMonth);
+    statsService
+      .dailyTrend({ year, month: m })
+      .then((d) => !cancelled && setDailyData(d))
+      .catch(() => !cancelled && setDailyData([]))
+      .finally(() => !cancelled && setDailyLoading(false));
+    return () => { cancelled = true; };
+  }, [year, selectedMonth]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setYearlyLoading(true);
+    statsService
+      .yearlyTrend()
+      .then((d) => !cancelled && setYearlyData(d))
+      .catch(() => !cancelled && setYearlyData([]))
+      .finally(() => !cancelled && setYearlyLoading(false));
+    return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    fetchTrend(year);
-  }, [year, fetchTrend]);
+  const showIncome = viewType === 'all' || viewType === 'income';
+  const showExpense = viewType === 'all' || viewType === 'expense';
 
-  const fetchDetail = useCallback(
-    async (month: number) => {
-      setDetailLoading(true);
-      try {
-        const data = await statsService.monthlyDetail({ year, month });
-        setDetail(data);
-      } catch {
-        setDetail([]);
-      } finally {
-        setDetailLoading(false);
-      }
-    },
-    [year],
-  );
-
-  useEffect(() => {
-    if (selectedMonth) fetchDetail(selectedMonth);
-  }, [selectedMonth, fetchDetail]);
-
-  const chartData = MONTHS.map((m) => {
-    const row = trend.find((t) => t.month === m);
+  const monthlyChartData = MONTHS.map((m) => {
+    const row = monthlyData.find((t) => t.month === m);
     return {
       month: m,
-      income: parseFloat(row?.income ?? '0') || 0,
-      expense: parseFloat(row?.expense ?? '0') || 0,
+      income: showIncome ? (parseFloat(row?.income ?? '0') || 0) : 0,
+      expense: showExpense ? (parseFloat(row?.expense ?? '0') || 0) : 0,
     };
   });
 
-  const totalIncome = chartData.reduce((s, d) => s + d.income, 0);
-  const totalExpense = chartData.reduce((s, d) => s + d.expense, 0);
-  const savingsRate =
-    totalIncome > 0
-      ? ((totalIncome - totalExpense) / totalIncome) * 100
-      : 0;
+  const totalIncome = MONTHS.reduce((s, m) => {
+    const row = monthlyData.find((t) => t.month === m);
+    return s + (parseFloat(row?.income ?? '0') || 0);
+  }, 0);
+  const totalExpense = MONTHS.reduce((s, m) => {
+    const row = monthlyData.find((t) => t.month === m);
+    return s + (parseFloat(row?.expense ?? '0') || 0);
+  }, 0);
+  const savingsRate = totalIncome > 0
+    ? ((totalIncome - totalExpense) / totalIncome) * 100
+    : 0;
 
-  const handleChartClick = (state: any) => {
-    const month = state?.activePayload?.[0]?.payload?.month as
-      | number
-      | undefined;
-    if (month) setSelectedMonth(month === selectedMonth ? null : month);
-  };
+  const dailyChartData = useMemo(() => {
+    const m = Number(selectedMonth);
+    const days = daysInMonth(year, m);
+    return Array.from({ length: days }, (_, i) => {
+      const day = i + 1;
+      const row = dailyData.find((d) => d.day === day);
+      return {
+        day,
+        income: showIncome ? (parseFloat(row?.income ?? '0') || 0) : 0,
+        expense: showExpense ? (parseFloat(row?.expense ?? '0') || 0) : 0,
+      };
+    });
+  }, [dailyData, year, selectedMonth, showIncome, showExpense]);
 
-  if (loading) return <Spinner />;
+  const dailyMonthIncome = dailyChartData.reduce((s, d) => s + d.income, 0);
+  const dailyMonthExpense = dailyChartData.reduce((s, d) => s + d.expense, 0);
+
+  const yearlyChartData = yearlyData.map((d) => ({
+    year: d.year,
+    income: showIncome ? (parseFloat(d.income) || 0) : 0,
+    expense: showExpense ? (parseFloat(d.expense) || 0) : 0,
+  }));
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6">
+      {/* Type toggle for all sections */}
+      <div className="flex flex-wrap items-center gap-3 justify-between">
         <YearSelector year={year} onChange={setYear} />
+        <TypeToggle value={viewType} onChange={setViewType} />
       </div>
 
-      {trend.length === 0 ? (
-        <EmptyState message="该年度暂无数据" />
-      ) : (
-        <>
-          {/* Line Chart */}
+      {/* ── Section 1: Monthly Trend ── */}
+      <div className="space-y-4">
+        <h2 className="text-base font-semibold flex items-center gap-2">
+          <CalendarDays className="h-4 w-4 text-primary" />
+          每月趋势
+        </h2>
+
+        {monthlyLoading ? (
+          <Spinner />
+        ) : monthlyData.length === 0 ? (
+          <EmptyState message="该年度暂无数据" />
+        ) : (
+          <>
+            <Card>
+              <CardContent className="pt-6">
+                <ResponsiveContainer width="100%" height={320}>
+                  <BarChart data={monthlyChartData} barGap={4}>
+                    <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
+                    <XAxis
+                      dataKey="month"
+                      tickFormatter={(v) => `${v}月`}
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis
+                      tickFormatter={formatYAxis}
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                      width={55}
+                    />
+                    <Tooltip content={<ChartTooltip />} labelFormatter={(v) => `${v}月`} />
+                    <Legend formatter={(value: string) => <span className="text-sm">{value}</span>} />
+                    {showIncome && <Bar dataKey="income" name="收入" fill={INCOME_COLOR} radius={[4, 4, 0, 0]} />}
+                    {showExpense && <Bar dataKey="expense" name="支出" fill={EXPENSE_COLOR} radius={[4, 4, 0, 0]} />}
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <Card>
+                <CardContent className="p-5">
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className="p-2 bg-income/10 rounded-lg">
+                      <TrendingUp className="h-4 w-4 text-income" />
+                    </div>
+                    <span className="text-sm text-muted-foreground">年度总收入</span>
+                  </div>
+                  <p className="text-2xl font-bold text-income tabular-nums">
+                    {formatCurrency(totalIncome, 'CNY')}
+                  </p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-5">
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className="p-2 bg-expense/10 rounded-lg">
+                      <TrendingDown className="h-4 w-4 text-expense" />
+                    </div>
+                    <span className="text-sm text-muted-foreground">年度总支出</span>
+                  </div>
+                  <p className="text-2xl font-bold text-expense tabular-nums">
+                    {formatCurrency(totalExpense, 'CNY')}
+                  </p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-5">
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className="p-2 bg-primary/10 rounded-lg">
+                      <PiggyBank className="h-4 w-4 text-primary" />
+                    </div>
+                    <span className="text-sm text-muted-foreground">储蓄率</span>
+                  </div>
+                  <p className={cn(
+                    'text-2xl font-bold tabular-nums',
+                    savingsRate >= 0 ? 'text-primary' : 'text-expense',
+                  )}>
+                    {savingsRate.toFixed(1)}%
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Section 2: Daily Trend ── */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold flex items-center gap-2">
+            <CalendarDays className="h-4 w-4 text-primary" />
+            日趋势
+          </h2>
+          <MonthSelect value={selectedMonth} onChange={setSelectedMonth} allowAll={false} />
+        </div>
+
+        {dailyLoading ? (
+          <Spinner />
+        ) : dailyData.length === 0 ? (
+          <EmptyState message="该月暂无数据" />
+        ) : (
+          <>
+            <Card>
+              <CardContent className="pt-6">
+                <ResponsiveContainer width="100%" height={280}>
+                  <AreaChart data={dailyChartData}>
+                    <defs>
+                      <linearGradient id="gradIncome" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={INCOME_COLOR} stopOpacity={0.2} />
+                        <stop offset="95%" stopColor={INCOME_COLOR} stopOpacity={0} />
+                      </linearGradient>
+                      <linearGradient id="gradExpense" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={EXPENSE_COLOR} stopOpacity={0.2} />
+                        <stop offset="95%" stopColor={EXPENSE_COLOR} stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
+                    <XAxis
+                      dataKey="day"
+                      tickFormatter={(v) => `${v}日`}
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                      interval={Math.floor(dailyChartData.length / 10)}
+                    />
+                    <YAxis
+                      tickFormatter={formatYAxis}
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                      width={50}
+                    />
+                    <Tooltip
+                      content={<ChartTooltip />}
+                      labelFormatter={(v) => `${selectedMonth}月${v}日`}
+                    />
+                    <Legend formatter={(value: string) => <span className="text-sm">{value}</span>} />
+                    {showIncome && (
+                      <Area
+                        type="monotone"
+                        dataKey="income"
+                        name="收入"
+                        stroke={INCOME_COLOR}
+                        strokeWidth={2}
+                        fill="url(#gradIncome)"
+                      />
+                    )}
+                    {showExpense && (
+                      <Area
+                        type="monotone"
+                        dataKey="expense"
+                        name="支出"
+                        stroke={EXPENSE_COLOR}
+                        strokeWidth={2}
+                        fill="url(#gradExpense)"
+                      />
+                    )}
+                  </AreaChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Card>
+                <CardContent className="p-4">
+                  <p className="text-xs text-muted-foreground mb-1">{selectedMonth}月收入</p>
+                  <p className="text-xl font-bold text-income tabular-nums">
+                    {formatCurrency(dailyMonthIncome, 'CNY')}
+                  </p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-4">
+                  <p className="text-xs text-muted-foreground mb-1">{selectedMonth}月支出</p>
+                  <p className="text-xl font-bold text-expense tabular-nums">
+                    {formatCurrency(dailyMonthExpense, 'CNY')}
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Section 3: Yearly Trend ── */}
+      <div className="space-y-4">
+        <h2 className="text-base font-semibold flex items-center gap-2">
+          <CalendarDays className="h-4 w-4 text-primary" />
+          年度趋势
+        </h2>
+
+        {yearlyLoading ? (
+          <Spinner />
+        ) : yearlyChartData.length === 0 ? (
+          <EmptyState message="暂无年度数据" />
+        ) : (
           <Card>
             <CardContent className="pt-6">
-              <ResponsiveContainer width="100%" height={350}>
-                <LineChart
-                  data={chartData}
-                  onClick={handleChartClick}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    strokeOpacity={0.2}
-                  />
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={yearlyChartData}>
+                  <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
                   <XAxis
-                    dataKey="month"
-                    tickFormatter={(v) => `${v}月`}
+                    dataKey="year"
+                    tickFormatter={(v) => `${v}`}
                     fontSize={12}
                     tickLine={false}
                     axisLine={false}
@@ -289,161 +551,38 @@ function MonthlyTrendTab() {
                     width={55}
                   />
                   <Tooltip
-                    content={
-                      <ChartTooltip />
-                    }
-                    labelFormatter={(v) => `${v}月`}
+                    content={<ChartTooltip />}
+                    labelFormatter={(v) => `${v}年`}
                   />
-                  <Legend
-                    formatter={(value: string) => (
-                      <span className="text-sm">{value}</span>
-                    )}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="income"
-                    name="收入"
-                    stroke={INCOME_COLOR}
-                    strokeWidth={2.5}
-                    dot={{ r: 4, fill: INCOME_COLOR, strokeWidth: 0 }}
-                    activeDot={{ r: 7, strokeWidth: 0 }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="expense"
-                    name="支出"
-                    stroke={EXPENSE_COLOR}
-                    strokeWidth={2.5}
-                    dot={{ r: 4, fill: EXPENSE_COLOR, strokeWidth: 0 }}
-                    activeDot={{ r: 7, strokeWidth: 0 }}
-                  />
+                  <Legend formatter={(value: string) => <span className="text-sm">{value}</span>} />
+                  {showIncome && (
+                    <Line
+                      type="monotone"
+                      dataKey="income"
+                      name="收入"
+                      stroke={INCOME_COLOR}
+                      strokeWidth={2.5}
+                      dot={{ r: 5, fill: INCOME_COLOR, strokeWidth: 0 }}
+                      activeDot={{ r: 7, strokeWidth: 0 }}
+                    />
+                  )}
+                  {showExpense && (
+                    <Line
+                      type="monotone"
+                      dataKey="expense"
+                      name="支出"
+                      stroke={EXPENSE_COLOR}
+                      strokeWidth={2.5}
+                      dot={{ r: 5, fill: EXPENSE_COLOR, strokeWidth: 0 }}
+                      activeDot={{ r: 7, strokeWidth: 0 }}
+                    />
+                  )}
                 </LineChart>
               </ResponsiveContainer>
-              {selectedMonth && (
-                <p className="text-xs text-center text-muted-foreground mt-2">
-                  已选择 {selectedMonth}月，点击相同月份可关闭
-                </p>
-              )}
             </CardContent>
           </Card>
-
-          {/* Monthly Detail */}
-          {selectedMonth && (
-            <Card className="animate-fade-in">
-              <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
-                <CardTitle className="text-base">
-                  {year}年{selectedMonth}月 交易明细
-                </CardTitle>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  onClick={() => setSelectedMonth(null)}
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </CardHeader>
-              <Separator />
-              <CardContent className="pt-3 max-h-80 overflow-y-auto">
-                {detailLoading ? (
-                  <div className="flex justify-center py-8">
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                  </div>
-                ) : detail.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-8">
-                    该月暂无交易
-                  </p>
-                ) : (
-                  <div className="space-y-0.5">
-                    {detail.map((tx) => (
-                      <div
-                        key={tx.id}
-                        className="flex items-center gap-3 py-2.5 px-2 rounded-lg hover:bg-muted/50 transition-colors"
-                      >
-                        <span className="text-lg w-8 h-8 flex items-center justify-center rounded-lg bg-muted/60 shrink-0">
-                          {tx.category?.icon ?? '📝'}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">
-                            {tx.category?.name ?? '未分类'}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {formatDate(tx.date)}
-                            {tx.note && ` · ${tx.note}`}
-                          </p>
-                        </div>
-                        <span
-                          className={cn(
-                            'text-sm font-semibold tabular-nums whitespace-nowrap',
-                            tx.type === 'income'
-                              ? 'text-income'
-                              : 'text-expense',
-                          )}
-                        >
-                          {tx.type === 'income' ? '+' : '-'}
-                          {formatCurrency(tx.amount, tx.currency)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Summary */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <Card>
-              <CardContent className="p-5">
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="p-2 bg-income/10 rounded-lg">
-                    <TrendingUp className="h-4 w-4 text-income" />
-                  </div>
-                  <span className="text-sm text-muted-foreground">
-                    年度总收入
-                  </span>
-                </div>
-                <p className="text-2xl font-bold text-income tabular-nums">
-                  {formatCurrency(totalIncome, 'CNY')}
-                </p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-5">
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="p-2 bg-expense/10 rounded-lg">
-                    <TrendingDown className="h-4 w-4 text-expense" />
-                  </div>
-                  <span className="text-sm text-muted-foreground">
-                    年度总支出
-                  </span>
-                </div>
-                <p className="text-2xl font-bold text-expense tabular-nums">
-                  {formatCurrency(totalExpense, 'CNY')}
-                </p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-5">
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="p-2 bg-primary/10 rounded-lg">
-                    <PiggyBank className="h-4 w-4 text-primary" />
-                  </div>
-                  <span className="text-sm text-muted-foreground">储蓄率</span>
-                </div>
-                <p
-                  className={cn(
-                    'text-2xl font-bold tabular-nums',
-                    savingsRate >= 0 ? 'text-primary' : 'text-expense',
-                  )}
-                >
-                  {savingsRate.toFixed(1)}%
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-        </>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -458,6 +597,7 @@ function CategoryBreakdownTab() {
   const [type, setType] = useState<'expense' | 'income'>('expense');
   const [data, setData] = useState<CategoryBreakdown[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeIndex, setActiveIndex] = useState(-1);
 
   useEffect(() => {
     let cancelled = false;
@@ -496,7 +636,6 @@ function CategoryBreakdownTab() {
 
   return (
     <div className="space-y-4">
-      {/* Controls */}
       <div className="flex flex-wrap items-center gap-3">
         <YearSelector year={year} onChange={setYear} />
         <MonthSelect value={month} onChange={setMonth} />
@@ -532,12 +671,13 @@ function CategoryBreakdownTab() {
         <EmptyState />
       ) : (
         <>
-          {/* Donut Pie */}
           <Card>
             <CardContent className="pt-6">
               <div className="relative">
                 <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
+                  <PieChart
+                    onMouseLeave={() => setActiveIndex(-1)}
+                  >
                     <Pie
                       data={pieData}
                       cx="50%"
@@ -548,48 +688,69 @@ function CategoryBreakdownTab() {
                       nameKey="name"
                       paddingAngle={2}
                       strokeWidth={0}
+                      shape={(props: any) => {
+                        const isActive = props.index === activeIndex;
+                        const dimmed = activeIndex >= 0 && !isActive;
+                        return (
+                          <Sector
+                            {...props}
+                            innerRadius={isActive ? props.innerRadius - 3 : props.innerRadius}
+                            outerRadius={isActive ? props.outerRadius + 8 : props.outerRadius}
+                            opacity={dimmed ? 0.4 : 1}
+                            style={{
+                              transition: 'all 0.25s cubic-bezier(0.4,0,0.2,1)',
+                              filter: isActive ? 'drop-shadow(0 4px 12px rgba(0,0,0,0.18))' : 'none',
+                              cursor: 'pointer',
+                            }}
+                            onMouseEnter={() => setActiveIndex(props.index)}
+                          />
+                        );
+                      }}
                     >
                       {pieData.map((_, i) => (
                         <Cell
                           key={i}
-                          fill={
-                            CATEGORY_PALETTE[i % CATEGORY_PALETTE.length]
-                          }
+                          fill={CATEGORY_PALETTE[i % CATEGORY_PALETTE.length]}
                         />
                       ))}
                     </Pie>
-                    <Tooltip
-                      content={({ active, payload }: any) => {
-                        if (!active || !payload?.length) return null;
-                        const d = payload[0].payload;
-                        return (
-                          <div className="rounded-lg border bg-card px-3 py-2 shadow-md text-sm">
-                            <p className="font-medium">
-                              {d.icon} {d.name}
-                            </p>
-                            <p className="text-muted-foreground">
-                              {formatCurrency(d.value, 'CNY')} (
-                              {d.percentage.toFixed(1)}%)
-                            </p>
-                          </div>
-                        );
-                      }}
-                    />
                   </PieChart>
                 </ResponsiveContainer>
-                {/* Center label */}
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="text-center">
-                    <p className="text-xs text-muted-foreground">
-                      {type === 'expense' ? '总支出' : '总收入'}
-                    </p>
-                    <p className="text-lg font-bold">
-                      {formatCurrency(total, 'CNY')}
-                    </p>
+                  <div
+                    key={activeIndex >= 0 ? activeIndex : 'default'}
+                    className={cn(
+                      'text-center',
+                      activeIndex >= 0
+                        ? 'animate-in fade-in-0 zoom-in-90 duration-300'
+                        : 'animate-in fade-in-0 duration-200',
+                    )}
+                  >
+                    {activeIndex >= 0 && pieData[activeIndex] ? (
+                      <>
+                        <p className="text-sm font-semibold">
+                          {pieData[activeIndex].icon} {pieData[activeIndex].name}
+                        </p>
+                        <p className="text-lg font-bold mt-0.5">
+                          {formatCurrency(pieData[activeIndex].value, 'CNY')}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          占比 {pieData[activeIndex].percentage.toFixed(1)}%
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-xs text-muted-foreground">
+                          {type === 'expense' ? '总支出' : '总收入'}
+                        </p>
+                        <p className="text-lg font-bold">
+                          {formatCurrency(total, 'CNY')}
+                        </p>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
-              {/* Custom legend */}
               <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 mt-2">
                 {sorted.map((cat, i) => (
                   <div
@@ -599,8 +760,7 @@ function CategoryBreakdownTab() {
                     <span
                       className="w-3 h-3 rounded-full shrink-0"
                       style={{
-                        backgroundColor:
-                          CATEGORY_PALETTE[i % CATEGORY_PALETTE.length],
+                        backgroundColor: CATEGORY_PALETTE[i % CATEGORY_PALETTE.length],
                       }}
                     />
                     <span>
@@ -612,7 +772,6 @@ function CategoryBreakdownTab() {
             </CardContent>
           </Card>
 
-          {/* Category Ranking */}
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-base">分类排名</CardTitle>
@@ -671,9 +830,7 @@ function CategoryBreakdownTab() {
                     {barData.map((_, i) => (
                       <Cell
                         key={i}
-                        fill={
-                          CATEGORY_PALETTE[i % CATEGORY_PALETTE.length]
-                        }
+                        fill={CATEGORY_PALETTE[i % CATEGORY_PALETTE.length]}
                       />
                     ))}
                   </Bar>
@@ -694,6 +851,7 @@ function CategoryBreakdownTab() {
 function MemberAnalysisTab() {
   const [year, setYear] = useState(dayjs().year());
   const [month, setMonth] = useState('all');
+  const [viewType, setViewType] = useState<'all' | 'expense' | 'income'>('all');
   const [data, setData] = useState<MemberBreakdown[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -704,6 +862,7 @@ function MemberAnalysisTab() {
       .memberBreakdown({
         year,
         ...(month !== 'all' && { month: Number(month) }),
+        ...(viewType !== 'all' && { type: viewType }),
       })
       .then((d) => !cancelled && setData(d))
       .catch(() => !cancelled && setData([]))
@@ -711,7 +870,7 @@ function MemberAnalysisTab() {
     return () => {
       cancelled = true;
     };
-  }, [year, month]);
+  }, [year, month, viewType]);
 
   const sorted = [...data].sort(
     (a, b) => parseFloat(b.total) - parseFloat(a.total),
@@ -730,11 +889,17 @@ function MemberAnalysisTab() {
     };
   });
 
+  const barColor = viewType === 'income' ? INCOME_COLOR : viewType === 'expense' ? EXPENSE_COLOR : '#0062FF';
+  const barLabel = viewType === 'income' ? '收入' : viewType === 'expense' ? '支出' : '金额';
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <YearSelector year={year} onChange={setYear} />
-        <MonthSelect value={month} onChange={setMonth} />
+      <div className="flex flex-wrap items-center gap-3 justify-between">
+        <div className="flex items-center gap-3">
+          <YearSelector year={year} onChange={setYear} />
+          <MonthSelect value={month} onChange={setMonth} />
+        </div>
+        <TypeToggle value={viewType} onChange={setViewType} />
       </div>
 
       {loading ? (
@@ -776,7 +941,7 @@ function MemberAnalysisTab() {
                 <Tooltip content={<ChartTooltip />} />
                 <Bar
                   dataKey="total"
-                  name="支出"
+                  name={barLabel}
                   radius={[0, 4, 4, 0]}
                   barSize={28}
                   label={({ x, y, width, height, value, index }: any) => {
@@ -795,12 +960,16 @@ function MemberAnalysisTab() {
                     );
                   }}
                 >
-                  {barData.map((_, i) => (
-                    <Cell
-                      key={i}
-                      fill={`rgba(0, 98, 255, ${1 - (i / Math.max(barData.length - 1, 1)) * 0.6})`}
-                    />
-                  ))}
+                  {barData.map((_, i) => {
+                    const hex = barColor.replace('#', '');
+                    const r = parseInt(hex.slice(0, 2), 16);
+                    const g = parseInt(hex.slice(2, 4), 16);
+                    const b = parseInt(hex.slice(4, 6), 16);
+                    const opacity = 1 - (i / Math.max(barData.length - 1, 1)) * 0.6;
+                    return (
+                      <Cell key={i} fill={`rgba(${r}, ${g}, ${b}, ${opacity})`} />
+                    );
+                  })}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
@@ -812,11 +981,12 @@ function MemberAnalysisTab() {
 }
 
 /* ================================================================== */
-/*  Tab 4 — Social Gifts Summary                                       */
+/*  Tab 4 — Social Gifts Analysis                                      */
 /* ================================================================== */
 
 function SocialGiftsTab() {
   const [year, setYear] = useState(dayjs().year());
+  const [viewType, setViewType] = useState<'all' | 'expense' | 'income'>('all');
   const [data, setData] = useState<SocialSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -833,6 +1003,9 @@ function SocialGiftsTab() {
     };
   }, [year]);
 
+  const showGiven = viewType === 'all' || viewType === 'expense';
+  const showReceived = viewType === 'all' || viewType === 'income';
+
   const totalGiven = data.reduce(
     (s, d) => s + (parseFloat(d.given) || 0),
     0,
@@ -845,14 +1018,15 @@ function SocialGiftsTab() {
 
   const chartData = data.map((d) => ({
     name: d.person_name,
-    given: parseFloat(d.given) || 0,
-    received: parseFloat(d.received) || 0,
+    given: showGiven ? (parseFloat(d.given) || 0) : 0,
+    received: showReceived ? (parseFloat(d.received) || 0) : 0,
   }));
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center gap-3 justify-between">
         <YearSelector year={year} onChange={setYear} />
+        <TypeToggle value={viewType} onChange={setViewType} />
       </div>
 
       {loading ? (
@@ -861,7 +1035,6 @@ function SocialGiftsTab() {
         <EmptyState />
       ) : (
         <>
-          {/* Summary */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Card>
               <CardContent className="p-5">
@@ -895,7 +1068,6 @@ function SocialGiftsTab() {
             </Card>
           </div>
 
-          {/* Grouped Bar Chart */}
           <Card>
             <CardContent className="pt-6">
               <ResponsiveContainer width="100%" height={350}>
@@ -927,24 +1099,27 @@ function SocialGiftsTab() {
                       <span className="text-sm">{value}</span>
                     )}
                   />
-                  <Bar
-                    dataKey="given"
-                    name="送出"
-                    fill={EXPENSE_COLOR}
-                    radius={[4, 4, 0, 0]}
-                  />
-                  <Bar
-                    dataKey="received"
-                    name="收到"
-                    fill={INCOME_COLOR}
-                    radius={[4, 4, 0, 0]}
-                  />
+                  {showGiven && (
+                    <Bar
+                      dataKey="given"
+                      name="送出"
+                      fill={EXPENSE_COLOR}
+                      radius={[4, 4, 0, 0]}
+                    />
+                  )}
+                  {showReceived && (
+                    <Bar
+                      dataKey="received"
+                      name="收到"
+                      fill={INCOME_COLOR}
+                      radius={[4, 4, 0, 0]}
+                    />
+                  )}
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
 
-          {/* Detail Table */}
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-base">明细列表</CardTitle>
@@ -955,8 +1130,8 @@ function SocialGiftsTab() {
                   <thead>
                     <tr className="border-b text-muted-foreground">
                       <th className="text-left py-2.5 font-medium">姓名</th>
-                      <th className="text-right py-2.5 font-medium">送出</th>
-                      <th className="text-right py-2.5 font-medium">收到</th>
+                      {showGiven && <th className="text-right py-2.5 font-medium">送出</th>}
+                      {showReceived && <th className="text-right py-2.5 font-medium">收到</th>}
                       <th className="text-right py-2.5 font-medium">净额</th>
                     </tr>
                   </thead>
@@ -971,12 +1146,16 @@ function SocialGiftsTab() {
                           <td className="py-2.5 font-medium">
                             {row.person_name}
                           </td>
-                          <td className="py-2.5 text-right text-expense tabular-nums">
-                            {formatCurrency(row.given, 'CNY')}
-                          </td>
-                          <td className="py-2.5 text-right text-income tabular-nums">
-                            {formatCurrency(row.received, 'CNY')}
-                          </td>
+                          {showGiven && (
+                            <td className="py-2.5 text-right text-expense tabular-nums">
+                              {formatCurrency(row.given, 'CNY')}
+                            </td>
+                          )}
+                          {showReceived && (
+                            <td className="py-2.5 text-right text-income tabular-nums">
+                              {formatCurrency(row.received, 'CNY')}
+                            </td>
+                          )}
                           <td
                             className={cn(
                               'py-2.5 text-right font-medium tabular-nums',
@@ -1009,8 +1188,11 @@ export default function StatisticsPage() {
     <div className="space-y-6 p-4 sm:p-6 max-w-5xl mx-auto">
       <h1 className="text-2xl font-bold tracking-tight">统计分析</h1>
 
-      <Tabs defaultValue="category">
-        <TabsList className="w-full grid grid-cols-3">
+      <Tabs defaultValue="overview">
+        <TabsList className="w-full grid grid-cols-4">
+          <TabsTrigger value="overview" className="text-xs sm:text-sm">
+            汇总分析
+          </TabsTrigger>
           <TabsTrigger value="category" className="text-xs sm:text-sm">
             分类分析
           </TabsTrigger>
@@ -1018,13 +1200,13 @@ export default function StatisticsPage() {
             人员分析
           </TabsTrigger>
           <TabsTrigger value="social" className="text-xs sm:text-sm">
-            人情汇总
+            人情分析
           </TabsTrigger>
         </TabsList>
 
-        {/* <TabsContent value="trend">
-          <MonthlyTrendTab />
-        </TabsContent> */}
+        <TabsContent value="overview">
+          <OverviewTab />
+        </TabsContent>
         <TabsContent value="category">
           <CategoryBreakdownTab />
         </TabsContent>

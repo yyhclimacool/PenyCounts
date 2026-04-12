@@ -4,7 +4,8 @@ use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::models::{
-    CategoryBreakdown, MemberBreakdown, MonthlyTrendItem, SocialSummary, Transaction,
+    CategoryBreakdown, DailyTrendItem, MemberBreakdown, MonthlyTrendItem, SocialSummary,
+    Transaction, YearlyTrendItem,
 };
 
 pub async fn monthly_trend(
@@ -113,11 +114,13 @@ pub async fn member_breakdown(
     user_id: Uuid,
     year: i32,
     month: Option<u32>,
+    txn_type: Option<&str>,
 ) -> Result<Vec<MemberBreakdown>, AppError> {
     tracing::debug!(
         user_id = %user_id,
         year = year,
         month = ?month,
+        r#type = ?txn_type,
         "svc::member_breakdown: querying"
     );
     let rows = sqlx::query_as::<_, MemberBreakdown>(
@@ -129,12 +132,14 @@ pub async fn member_breakdown(
          WHERE t.user_id = $1
            AND EXTRACT(YEAR FROM t.date)::int4 = $2
            AND ($3::int4 IS NULL OR EXTRACT(MONTH FROM t.date)::int4 = $3)
+           AND ($4::text IS NULL OR t.type = $4)
          GROUP BY tm.member_name
          ORDER BY total DESC",
     )
     .bind(user_id)
     .bind(year)
     .bind(month.map(|m| m as i32))
+    .bind(txn_type)
     .fetch_all(pool)
     .await?;
     tracing::debug!(members = rows.len(), "svc::member_breakdown: done");
@@ -147,27 +152,83 @@ pub async fn social_summary(
     user_id: Uuid,
     year: i32,
 ) -> Result<Vec<SocialSummary>, AppError> {
-    tracing::debug!(user_id = %user_id, year = year, "svc::social_summary: querying");
+    tracing::debug!(user_id = %user_id, year = year, "svc::social_summary: querying from transactions");
     let rows = sqlx::query_as::<_, SocialSummary>(
         "SELECT
-             person_name,
-             COALESCE(SUM(CASE WHEN type = 'give'    THEN amount ELSE 0 END), 0) AS given,
-             COALESCE(SUM(CASE WHEN type = 'receive' THEN amount ELSE 0 END), 0) AS received,
+             tm.member_name AS person_name,
+             COALESCE(SUM(CASE WHEN t.type = 'expense' THEN tm.share_amount ELSE 0 END), 0) AS given,
+             COALESCE(SUM(CASE WHEN t.type = 'income'  THEN tm.share_amount ELSE 0 END), 0) AS received,
              COALESCE(
-                 SUM(CASE WHEN type = 'receive' THEN amount ELSE 0 END)
-               - SUM(CASE WHEN type = 'give'    THEN amount ELSE 0 END),
+                 SUM(CASE WHEN t.type = 'income'  THEN tm.share_amount ELSE 0 END)
+               - SUM(CASE WHEN t.type = 'expense' THEN tm.share_amount ELSE 0 END),
                  0
              ) AS net
-         FROM social_gifts
-         WHERE user_id = $1 AND EXTRACT(YEAR FROM date) = $2
-         GROUP BY person_name
-         ORDER BY person_name",
+         FROM transactions t
+         JOIN categories c ON t.category_id = c.id
+         JOIN transaction_members tm ON tm.transaction_id = t.id
+         WHERE t.user_id = $1
+           AND EXTRACT(YEAR FROM t.date)::int4 = $2
+           AND c.name LIKE '%人情%'
+         GROUP BY tm.member_name
+         ORDER BY tm.member_name",
     )
     .bind(user_id)
     .bind(year)
     .fetch_all(pool)
     .await?;
     tracing::debug!(rows = rows.len(), "svc::social_summary: done");
+
+    Ok(rows)
+}
+
+pub async fn daily_trend(
+    pool: &PgPool,
+    user_id: Uuid,
+    year: i32,
+    month: u32,
+) -> Result<Vec<DailyTrendItem>, AppError> {
+    tracing::debug!(user_id = %user_id, year = year, month = month, "svc::daily_trend: querying");
+    let rows = sqlx::query_as::<_, DailyTrendItem>(
+        "SELECT
+             EXTRACT(DAY FROM date)::int4 AS day,
+             COALESCE(SUM(CASE WHEN type = 'income'  THEN amount ELSE 0 END), 0) AS income,
+             COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense
+         FROM transactions
+         WHERE user_id = $1
+           AND EXTRACT(YEAR FROM date)::int4 = $2
+           AND EXTRACT(MONTH FROM date)::int4 = $3
+         GROUP BY EXTRACT(DAY FROM date)
+         ORDER BY day",
+    )
+    .bind(user_id)
+    .bind(year)
+    .bind(month as i32)
+    .fetch_all(pool)
+    .await?;
+    tracing::debug!(rows = rows.len(), "svc::daily_trend: done");
+
+    Ok(rows)
+}
+
+pub async fn yearly_trend(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<YearlyTrendItem>, AppError> {
+    tracing::debug!(user_id = %user_id, "svc::yearly_trend: querying");
+    let rows = sqlx::query_as::<_, YearlyTrendItem>(
+        "SELECT
+             EXTRACT(YEAR FROM date)::int4 AS year,
+             COALESCE(SUM(CASE WHEN type = 'income'  THEN amount ELSE 0 END), 0) AS income,
+             COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense
+         FROM transactions
+         WHERE user_id = $1
+         GROUP BY EXTRACT(YEAR FROM date)
+         ORDER BY year",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    tracing::debug!(rows = rows.len(), "svc::yearly_trend: done");
 
     Ok(rows)
 }

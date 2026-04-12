@@ -1,9 +1,11 @@
 import type {
   CategoryBreakdown,
+  DailyTrend,
   MemberBreakdown,
   MonthlyTrend,
   SocialSummary,
   Transaction,
+  YearlyTrend,
 } from '@/types';
 import { api } from './api';
 
@@ -25,10 +27,16 @@ export interface CategoryBreakdownParams {
 export interface MemberBreakdownParams {
   year?: number;
   month?: number;
+  type?: 'income' | 'expense';
 }
 
 export interface SocialSummaryParams {
   year?: number;
+}
+
+export interface DailyTrendParams {
+  year: number;
+  month: number;
 }
 
 export async function monthlyTrend(params?: MonthlyTrendParams): Promise<MonthlyTrend[]> {
@@ -55,5 +63,15 @@ export async function memberBreakdown(params?: MemberBreakdownParams): Promise<M
 
 export async function socialSummary(params?: SocialSummaryParams): Promise<SocialSummary[]> {
   const { data } = await api.get<SocialSummary[]>('/stats/social-summary', { params });
+  return data;
+}
+
+export async function dailyTrend(params: DailyTrendParams): Promise<DailyTrend[]> {
+  const { data } = await api.get<DailyTrend[]>('/stats/daily-trend', { params });
+  return data;
+}
+
+export async function yearlyTrend(): Promise<YearlyTrend[]> {
+  const { data } = await api.get<YearlyTrend[]>('/stats/yearly-trend');
   return data;
 }
