@@ -25,15 +25,22 @@ impl FromRequestParts<AppState> for AuthUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
+        let method = &parts.method;
+        let uri = &parts.uri;
+
         let auth_header = parts
             .headers
             .get("Authorization")
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| AppError::Unauthorized("Missing authorization header".to_string()))?;
+            .ok_or_else(|| {
+                tracing::debug!(%method, %uri, "auth: missing Authorization header");
+                AppError::Unauthorized("Missing authorization header".to_string())
+            })?;
 
         let token = auth_header
             .strip_prefix("Bearer ")
             .ok_or_else(|| {
+                tracing::debug!(%method, %uri, "auth: invalid Authorization header format");
                 AppError::Unauthorized("Invalid authorization header format".to_string())
             })?;
 
@@ -42,8 +49,12 @@ impl FromRequestParts<AppState> for AuthUser {
             &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
             &Validation::new(Algorithm::HS256),
         )
-        .map_err(|_| AppError::Unauthorized("Invalid or expired token".to_string()))?;
+        .map_err(|e| {
+            tracing::debug!(%method, %uri, error = %e, "auth: JWT decode failed");
+            AppError::Unauthorized("Invalid or expired token".to_string())
+        })?;
 
+        tracing::debug!(user_id = %token_data.claims.sub, %method, %uri, "auth: authenticated");
         Ok(AuthUser {
             user_id: token_data.claims.sub,
         })

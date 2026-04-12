@@ -211,6 +211,7 @@ pub struct TransactionFilter {
     pub category_id: Option<Uuid>,
     pub r#type: Option<String>,
     pub search: Option<String>,
+    pub member_name: Option<String>,
     pub page: Option<u32>,
     pub per_page: Option<u32>,
 }

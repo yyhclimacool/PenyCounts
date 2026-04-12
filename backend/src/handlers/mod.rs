@@ -162,7 +162,32 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
         // Health
         .route("/api/health", axum::routing::get(health))
         .layer(CompressionLayer::new().br(true).gzip(true))
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|_req: &axum::http::Request<_>| {
+                    tracing::info_span!("http")
+                })
+                .on_request(
+                    |req: &axum::http::Request<_>, _span: &tracing::Span| {
+                        tracing::info!(
+                            method = %req.method(),
+                            uri = %req.uri(),
+                            "request started"
+                        );
+                    },
+                )
+                .on_response(
+                    |res: &axum::http::response::Response<_>,
+                     latency: std::time::Duration,
+                     _span: &tracing::Span| {
+                        tracing::info!(
+                            status = res.status().as_u16(),
+                            latency_ms = latency.as_millis() as u64,
+                            "request completed"
+                        );
+                    },
+                ),
+        )
         .layer(cors)
         .with_state(state)
 }

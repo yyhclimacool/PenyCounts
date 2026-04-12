@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router';
 import dayjs from 'dayjs';
 import {
@@ -80,9 +80,12 @@ export default function TransactionsPage() {
 
   const [filterType, setFilterType] = useState<string>('all');
   const [filterCategoryId, setFilterCategoryId] = useState<string>('all');
+  const [filterMember, setFilterMember] = useState<string>('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [searchText, setSearchText] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [allMembers, setAllMembers] = useState<Member[]>([]);
@@ -106,8 +109,10 @@ export default function TransactionsPage() {
       };
       if (filterType !== 'all') filters.type = filterType;
       if (filterCategoryId !== 'all') filters.category_id = filterCategoryId;
-      if (dateFrom) filters.date_from = dateFrom;
-      if (dateTo) filters.date_to = dateTo;
+      if (filterMember !== 'all') filters.member_name = filterMember;
+      if (dateFrom) filters.start_date = dateFrom;
+      if (dateTo) filters.end_date = dateTo;
+      if (searchText.trim()) filters.search = searchText.trim();
       const res = await transactionsService.list(filters);
       setTransactions(res.data);
       setTotal(res.total);
@@ -116,7 +121,7 @@ export default function TransactionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterType, filterCategoryId, dateFrom, dateTo, addToast]);
+  }, [page, filterType, filterCategoryId, filterMember, dateFrom, dateTo, searchText, addToast]);
 
   useEffect(() => {
     fetchTransactions();
@@ -152,28 +157,16 @@ export default function TransactionsPage() {
     }));
   }, [transactions, categories]);
 
-  const filteredTransactions = useMemo(() => {
-    if (!searchText.trim()) return enrichedTransactions;
-    const q = searchText.toLowerCase();
-    return enrichedTransactions.filter(
-      (tx) =>
-        tx.category?.name?.toLowerCase().includes(q) ||
-        tx.subcategory?.name?.toLowerCase().includes(q) ||
-        tx.location?.toLowerCase().includes(q) ||
-        tx.note?.toLowerCase().includes(q),
-    );
-  }, [enrichedTransactions, searchText]);
-
   const grouped = useMemo(() => {
     const map = new Map<string, Transaction[]>();
-    for (const tx of filteredTransactions) {
+    for (const tx of enrichedTransactions) {
       const monthKey = tx.date.slice(0, 7);
       const arr = map.get(monthKey) ?? [];
       arr.push(tx);
       map.set(monthKey, arr);
     }
     return Array.from(map.entries()).sort(([a], [b]) => b.localeCompare(a));
-  }, [filteredTransactions]);
+  }, [enrichedTransactions]);
 
   const totalPages = Math.ceil(total / PER_PAGE);
 
@@ -225,9 +218,6 @@ export default function TransactionsPage() {
 
     setSubmitting(true);
     try {
-      const members =
-        memberTags.length > 0 ? memberTags : undefined;
-
       const payload = {
         type: form.type,
         amount: form.amount,
@@ -238,7 +228,7 @@ export default function TransactionsPage() {
         time: form.time,
         location: form.location || null,
         note: form.note || null,
-        members,
+        members: memberTags,
       };
 
       if (editingTx) {
@@ -251,6 +241,9 @@ export default function TransactionsPage() {
 
       setDialogOpen(false);
       fetchTransactions();
+      if (memberTags.length > 0) {
+        membersService.list().then(setAllMembers).catch(() => {});
+      }
     } catch {
       addToast({ title: '操作失败', variant: 'destructive' });
     } finally {
@@ -316,7 +309,7 @@ export default function TransactionsPage() {
       {/* Filters Toolbar */}
       <Card>
         <CardContent className="p-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div>
               <Label className="text-xs text-muted-foreground mb-1.5 block">
                 开始日期
@@ -390,14 +383,46 @@ export default function TransactionsPage() {
             </div>
             <div>
               <Label className="text-xs text-muted-foreground mb-1.5 block">
+                人员
+              </Label>
+              <Select
+                value={filterMember}
+                onValueChange={(v) => {
+                  setFilterMember(v);
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部人员</SelectItem>
+                  {allMembers.map((m) => (
+                    <SelectItem key={m.id} value={m.name}>
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground mb-1.5 block">
                 搜索
               </Label>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="分类、地点、备注..."
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.target.value)}
+                  placeholder="分类、地点、备注、人员..."
+                  value={searchInput}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSearchInput(val);
+                    clearTimeout(searchTimerRef.current);
+                    searchTimerRef.current = setTimeout(() => {
+                      setSearchText(val);
+                      setPage(1);
+                    }, 400);
+                  }}
                   className="pl-9"
                 />
               </div>
@@ -411,7 +436,7 @@ export default function TransactionsPage() {
         <div className="flex items-center justify-center h-48">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
-      ) : filteredTransactions.length === 0 ? (
+      ) : enrichedTransactions.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center py-16">
             <ReceiptText className="h-14 w-14 text-muted-foreground/40 mb-4" />
@@ -759,7 +784,7 @@ export default function TransactionsPage() {
 
             {/* Members */}
             <div>
-              <Label>成员</Label>
+              <Label>人员</Label>
               <div className="flex flex-wrap items-center gap-1.5 p-2 border border-input rounded-lg mt-1.5 min-h-10 bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background transition-shadow">
                 {memberTags.map((tag) => (
                   <Badge
@@ -787,30 +812,28 @@ export default function TransactionsPage() {
                   onKeyDown={handleMemberKeyDown}
                   placeholder={
                     memberTags.length === 0
-                      ? '输入成员姓名，按回车添加'
+                      ? '输入人员姓名，按回车添加'
                       : ''
                   }
                   className="flex-1 min-w-[120px] outline-none bg-transparent text-sm py-1"
                 />
               </div>
-              {allMembers.length > 0 && memberTags.length === 0 && (
+              {allMembers.filter((m) => !memberTags.includes(m.name)).length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-2">
-                  {allMembers.map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      className="text-xs px-2 py-1 rounded-md bg-muted hover:bg-muted/80 text-muted-foreground transition-colors cursor-pointer"
-                      onClick={() =>
-                        setMemberTags((prev) =>
-                          prev.includes(m.name)
-                            ? prev
-                            : [...prev, m.name],
-                        )
-                      }
-                    >
-                      + {m.name}
-                    </button>
-                  ))}
+                  {allMembers
+                    .filter((m) => !memberTags.includes(m.name))
+                    .map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        className="text-xs px-2 py-1 rounded-md bg-muted hover:bg-muted/80 text-muted-foreground transition-colors cursor-pointer"
+                        onClick={() =>
+                          setMemberTags((prev) => [...prev, m.name])
+                        }
+                      >
+                        + {m.name}
+                      </button>
+                    ))}
                 </div>
               )}
             </div>

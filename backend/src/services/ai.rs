@@ -11,12 +11,14 @@ use crate::models::{Category, ChatMessage, LlmConfig, LlmConfigRequest};
 // ── LLM config CRUD ──────────────────────────────────────────────────
 
 pub async fn get_llm_configs(pool: &PgPool, user_id: Uuid) -> Result<Vec<LlmConfig>, AppError> {
+    tracing::debug!(user_id = %user_id, "svc::get_llm_configs: querying");
     let configs = sqlx::query_as::<_, LlmConfig>(
         "SELECT * FROM llm_configs WHERE user_id = $1 ORDER BY is_active DESC, provider",
     )
     .bind(user_id)
     .fetch_all(pool)
     .await?;
+    tracing::debug!(count = configs.len(), "svc::get_llm_configs: done");
 
     Ok(configs)
 }
@@ -26,11 +28,13 @@ pub async fn create_llm_config(
     user_id: Uuid,
     req: LlmConfigRequest,
 ) -> Result<LlmConfig, AppError> {
+    tracing::debug!(user_id = %user_id, provider = %req.provider, model = %req.model_name, "svc::create_llm_config: deactivating old configs");
     sqlx::query("UPDATE llm_configs SET is_active = false WHERE user_id = $1")
         .bind(user_id)
         .execute(pool)
         .await?;
 
+    tracing::debug!("svc::create_llm_config: inserting new config");
     let config = sqlx::query_as::<_, LlmConfig>(
         "INSERT INTO llm_configs (id, user_id, provider, api_url, api_key, model_name, is_active)
          VALUES ($1, $2, $3, $4, $5, $6, true)
@@ -44,6 +48,7 @@ pub async fn create_llm_config(
     .bind(&req.model_name)
     .fetch_one(pool)
     .await?;
+    tracing::debug!(config_id = %config.id, "svc::create_llm_config: inserted");
 
     Ok(config)
 }
@@ -54,6 +59,7 @@ pub async fn update_llm_config(
     config_id: Uuid,
     req: LlmConfigRequest,
 ) -> Result<LlmConfig, AppError> {
+    tracing::debug!(user_id = %user_id, config_id = %config_id, provider = %req.provider, model = %req.model_name, "svc::update_llm_config: executing UPDATE");
     let config = sqlx::query_as::<_, LlmConfig>(
         "UPDATE llm_configs
          SET provider = $1, api_url = $2, api_key = $3, model_name = $4
@@ -68,7 +74,11 @@ pub async fn update_llm_config(
     .bind(user_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("LLM config not found".to_string()))?;
+    .ok_or_else(|| {
+        tracing::debug!(config_id = %config_id, "svc::update_llm_config: not found");
+        AppError::NotFound("LLM config not found".to_string())
+    })?;
+    tracing::debug!(config_id = %config.id, "svc::update_llm_config: updated");
 
     Ok(config)
 }
@@ -78,11 +88,13 @@ pub async fn set_active_llm_config(
     user_id: Uuid,
     config_id: Uuid,
 ) -> Result<(), AppError> {
+    tracing::debug!(user_id = %user_id, config_id = %config_id, "svc::set_active_llm_config: deactivating all");
     sqlx::query("UPDATE llm_configs SET is_active = false WHERE user_id = $1")
         .bind(user_id)
         .execute(pool)
         .await?;
 
+    tracing::debug!("svc::set_active_llm_config: activating target");
     let result = sqlx::query(
         "UPDATE llm_configs SET is_active = true WHERE id = $1 AND user_id = $2",
     )
@@ -91,6 +103,7 @@ pub async fn set_active_llm_config(
     .execute(pool)
     .await?;
 
+    tracing::debug!(rows_affected = result.rows_affected(), "svc::set_active_llm_config: done");
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("LLM config not found".to_string()));
     }
@@ -103,6 +116,7 @@ pub async fn delete_llm_config(
     user_id: Uuid,
     config_id: Uuid,
 ) -> Result<(), AppError> {
+    tracing::debug!(user_id = %user_id, config_id = %config_id, "svc::delete_llm_config: executing DELETE");
     let result =
         sqlx::query("DELETE FROM llm_configs WHERE id = $1 AND user_id = $2")
             .bind(config_id)
@@ -110,6 +124,7 @@ pub async fn delete_llm_config(
             .execute(pool)
             .await?;
 
+    tracing::debug!(rows_affected = result.rows_affected(), "svc::delete_llm_config: done");
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("LLM config not found".to_string()));
     }
@@ -123,21 +138,25 @@ pub async fn get_chat_history(
     pool: &PgPool,
     user_id: Uuid,
 ) -> Result<Vec<ChatMessage>, AppError> {
+    tracing::debug!(user_id = %user_id, "svc::get_chat_history: querying");
     let messages = sqlx::query_as::<_, ChatMessage>(
         "SELECT * FROM chat_messages WHERE user_id = $1 ORDER BY created_at ASC",
     )
     .bind(user_id)
     .fetch_all(pool)
     .await?;
+    tracing::debug!(count = messages.len(), "svc::get_chat_history: done");
 
     Ok(messages)
 }
 
 pub async fn clear_chat_history(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM chat_messages WHERE user_id = $1")
+    tracing::debug!(user_id = %user_id, "svc::clear_chat_history: deleting");
+    let result = sqlx::query("DELETE FROM chat_messages WHERE user_id = $1")
         .bind(user_id)
         .execute(pool)
         .await?;
+    tracing::debug!(rows_deleted = result.rows_affected(), "svc::clear_chat_history: done");
     Ok(())
 }
 
@@ -146,6 +165,9 @@ pub async fn chat_stream(
     user_id: Uuid,
     message: String,
 ) -> Result<impl futures::Stream<Item = Result<Event, Infallible>>, AppError> {
+    tracing::debug!(user_id = %user_id, message_len = message.len(), "svc::chat_stream: starting");
+
+    tracing::debug!("svc::chat_stream: loading active LLM config");
     let llm_config = sqlx::query_as::<_, LlmConfig>(
         "SELECT * FROM llm_configs WHERE user_id = $1 AND is_active = true LIMIT 1",
     )
@@ -153,9 +175,17 @@ pub async fn chat_stream(
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| {
+        tracing::debug!(user_id = %user_id, "svc::chat_stream: no active LLM config");
         AppError::BadRequest("No active LLM configuration. Please configure one first.".to_string())
     })?;
+    tracing::debug!(
+        provider = %llm_config.provider,
+        model = %llm_config.model_name,
+        api_url = %llm_config.api_url,
+        "svc::chat_stream: LLM config loaded"
+    );
 
+    tracing::debug!("svc::chat_stream: saving user message to chat_messages");
     sqlx::query(
         "INSERT INTO chat_messages (id, user_id, role, content, created_at)
          VALUES ($1, $2, 'user', $3, $4)",
@@ -167,12 +197,14 @@ pub async fn chat_stream(
     .execute(pool)
     .await?;
 
+    tracing::debug!("svc::chat_stream: loading categories for system prompt");
     let categories = sqlx::query_as::<_, Category>(
         "SELECT * FROM categories WHERE user_id IS NULL OR user_id = $1 ORDER BY type, sort_order",
     )
     .bind(user_id)
     .fetch_all(pool)
     .await?;
+    tracing::debug!(categories = categories.len(), "svc::chat_stream: categories loaded");
 
     let category_list: String = categories
         .iter()
@@ -196,12 +228,14 @@ pub async fn chat_stream(
         category_list
     );
 
+    tracing::debug!("svc::chat_stream: loading recent chat history");
     let history = sqlx::query_as::<_, ChatMessage>(
         "SELECT * FROM chat_messages WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20",
     )
     .bind(user_id)
     .fetch_all(pool)
     .await?;
+    tracing::debug!(history_count = history.len(), "svc::chat_stream: history loaded");
 
     let mut messages = vec![serde_json::json!({
         "role": "system",
@@ -261,6 +295,13 @@ pub async fn chat_stream(
         "tools": tools,
     });
 
+    tracing::debug!(
+        model = %llm_config.model_name,
+        api_url = %llm_config.api_url,
+        message_count = messages.len(),
+        "svc::chat_stream: sending request to LLM"
+    );
+
     let client = reqwest::Client::new();
     let response = client
         .post(&llm_config.api_url)
@@ -269,20 +310,27 @@ pub async fn chat_stream(
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("LLM request failed: {}", e)))?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "svc::chat_stream: LLM request failed");
+            AppError::Internal(format!("LLM request failed: {}", e))
+        })?;
 
-    if !response.status().is_success() {
-        let status = response.status();
+    let status = response.status();
+    tracing::debug!(status = %status, "svc::chat_stream: LLM response status");
+
+    if !status.is_success() {
         let body = response
             .text()
             .await
             .unwrap_or_else(|_| "unknown".to_string());
+        tracing::error!(status = %status, body = %body, "svc::chat_stream: LLM API error");
         return Err(AppError::Internal(format!(
             "LLM API returned {}: {}",
             status, body
         )));
     }
 
+    tracing::debug!("svc::chat_stream: starting SSE stream processing");
     let pool_clone = pool.clone();
     let user_id_clone = user_id;
 
@@ -290,11 +338,13 @@ pub async fn chat_stream(
         let mut full_response = String::new();
         let mut byte_stream = response.bytes_stream();
         let mut buffer = String::new();
+        let mut chunk_count: u32 = 0;
 
         while let Some(chunk) = byte_stream.next().await {
             match chunk {
                 Ok(bytes) => {
                     buffer.push_str(&String::from_utf8_lossy(&bytes));
+                    chunk_count += 1;
 
                     while let Some(pos) = buffer.find('\n') {
                         let line = buffer[..pos].trim().to_string();
@@ -305,6 +355,7 @@ pub async fn chat_stream(
                         }
 
                         if line == "data: [DONE]" {
+                            tracing::debug!(chunks = chunk_count, response_len = full_response.len(), "svc::chat_stream: stream completed");
                             yield Ok(Event::default().data("[DONE]"));
                             continue;
                         }
@@ -322,6 +373,7 @@ pub async fn chat_stream(
                                     for tc in tool_calls {
                                         if let Some(func) = tc.get("function") {
                                             let tc_json = serde_json::to_string(func).unwrap_or_default();
+                                            tracing::debug!(tool_call = %tc_json, "svc::chat_stream: received tool call");
                                             yield Ok(Event::default().event("tool_call").data(tc_json));
                                         }
                                     }
@@ -331,7 +383,7 @@ pub async fn chat_stream(
                     }
                 }
                 Err(e) => {
-                    tracing::error!("LLM stream error: {}", e);
+                    tracing::error!(error = %e, "svc::chat_stream: stream error");
                     yield Ok(Event::default().event("error").data(e.to_string()));
                     break;
                 }
@@ -339,6 +391,7 @@ pub async fn chat_stream(
         }
 
         if !full_response.is_empty() {
+            tracing::debug!(response_len = full_response.len(), "svc::chat_stream: saving assistant response");
             let _ = sqlx::query(
                 "INSERT INTO chat_messages (id, user_id, role, content, created_at)
                  VALUES ($1, $2, 'assistant', $3, $4)",

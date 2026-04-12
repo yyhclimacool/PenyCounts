@@ -10,6 +10,14 @@ pub async fn create_social_gift(
     user_id: Uuid,
     req: CreateSocialGiftRequest,
 ) -> Result<SocialGift, AppError> {
+    tracing::debug!(
+        user_id = %user_id,
+        person = %req.person_name,
+        r#type = %req.r#type,
+        amount = %req.amount,
+        occasion = ?req.occasion,
+        "svc::create_social_gift: validating"
+    );
     if req.person_name.is_empty() {
         return Err(AppError::Validation(
             "Person name cannot be empty".to_string(),
@@ -34,6 +42,7 @@ pub async fn create_social_gift(
     .bind(Utc::now())
     .fetch_one(pool)
     .await?;
+    tracing::debug!(gift_id = %gift.id, "svc::create_social_gift: inserted");
 
     Ok(gift)
 }
@@ -43,14 +52,20 @@ pub async fn get_social_gift(
     user_id: Uuid,
     gift_id: Uuid,
 ) -> Result<SocialGift, AppError> {
-    sqlx::query_as::<_, SocialGift>(
+    tracing::debug!(user_id = %user_id, gift_id = %gift_id, "svc::get_social_gift: querying");
+    let gift = sqlx::query_as::<_, SocialGift>(
         "SELECT * FROM social_gifts WHERE id = $1 AND user_id = $2",
     )
     .bind(gift_id)
     .bind(user_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("Social gift not found".to_string()))
+    .ok_or_else(|| {
+        tracing::debug!(gift_id = %gift_id, "svc::get_social_gift: not found");
+        AppError::NotFound("Social gift not found".to_string())
+    })?;
+    tracing::debug!(gift_id = %gift.id, person = %gift.person_name, "svc::get_social_gift: found");
+    Ok(gift)
 }
 
 pub async fn list_social_gifts(
@@ -61,6 +76,15 @@ pub async fn list_social_gifts(
     let page = filter.page.unwrap_or(1).max(1);
     let per_page = filter.per_page.unwrap_or(20).min(100);
     let offset = ((page - 1) * per_page) as i64;
+    tracing::debug!(
+        user_id = %user_id,
+        page = page,
+        per_page = per_page,
+        r#type = ?filter.r#type,
+        person_name = ?filter.person_name,
+        year = ?filter.year,
+        "svc::list_social_gifts: executing count query"
+    );
 
     let total: (i64,) = sqlx::query_as(
         "SELECT COUNT(*)::bigint FROM social_gifts
@@ -75,6 +99,7 @@ pub async fn list_social_gifts(
     .bind(filter.year)
     .fetch_one(pool)
     .await?;
+    tracing::debug!(total = total.0, "svc::list_social_gifts: count result");
 
     let gifts = sqlx::query_as::<_, SocialGift>(
         "SELECT * FROM social_gifts
@@ -93,6 +118,7 @@ pub async fn list_social_gifts(
     .bind(offset)
     .fetch_all(pool)
     .await?;
+    tracing::debug!(rows = gifts.len(), "svc::list_social_gifts: data query done");
 
     Ok(PaginatedResponse {
         data: gifts,
@@ -108,6 +134,14 @@ pub async fn update_social_gift(
     gift_id: Uuid,
     req: CreateSocialGiftRequest,
 ) -> Result<SocialGift, AppError> {
+    tracing::debug!(
+        user_id = %user_id,
+        gift_id = %gift_id,
+        person = %req.person_name,
+        r#type = %req.r#type,
+        amount = %req.amount,
+        "svc::update_social_gift: executing UPDATE"
+    );
     let gift = sqlx::query_as::<_, SocialGift>(
         "UPDATE social_gifts
          SET type = $1, person_name = $2, relation = $3, occasion = $4,
@@ -127,7 +161,11 @@ pub async fn update_social_gift(
     .bind(user_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("Social gift not found".to_string()))?;
+    .ok_or_else(|| {
+        tracing::debug!(gift_id = %gift_id, "svc::update_social_gift: not found");
+        AppError::NotFound("Social gift not found".to_string())
+    })?;
+    tracing::debug!(gift_id = %gift.id, "svc::update_social_gift: updated");
 
     Ok(gift)
 }
@@ -137,12 +175,14 @@ pub async fn delete_social_gift(
     user_id: Uuid,
     gift_id: Uuid,
 ) -> Result<(), AppError> {
+    tracing::debug!(user_id = %user_id, gift_id = %gift_id, "svc::delete_social_gift: executing DELETE");
     let result = sqlx::query("DELETE FROM social_gifts WHERE id = $1 AND user_id = $2")
         .bind(gift_id)
         .bind(user_id)
         .execute(pool)
         .await?;
 
+    tracing::debug!(rows_affected = result.rows_affected(), "svc::delete_social_gift: done");
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Social gift not found".to_string()));
     }

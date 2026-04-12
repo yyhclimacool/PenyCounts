@@ -5,8 +5,10 @@ export interface TransactionListFilters {
   type?: 'income' | 'expense';
   category_id?: string;
   subcategory_id?: string;
-  date_from?: string;
-  date_to?: string;
+  member_name?: string;
+  start_date?: string;
+  end_date?: string;
+  search?: string;
   page?: number;
   per_page?: number;
 }

@@ -36,6 +36,14 @@ impl IntoResponse for AppError {
             AppError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),
         };
 
+        if status.is_server_error() {
+            tracing::error!(status = %status, error = %message, "Server error");
+        } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            tracing::warn!(status = %status, error = %message, "Auth error");
+        } else {
+            tracing::debug!(status = %status, error = %message, "Client error");
+        }
+
         let body = Json(serde_json::json!({ "error": message }));
         (status, body).into_response()
     }
