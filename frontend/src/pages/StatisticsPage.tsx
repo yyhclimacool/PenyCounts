@@ -57,14 +57,14 @@ import type {
 import { formatCurrency, formatDate } from '@/utils/format';
 import { cn } from '@/utils/cn';
 
-const INCOME_COLOR = '#22c55e';
-const EXPENSE_COLOR = '#ef4444';
-const PRIMARY_COLOR = '#6366f1';
+const INCOME_COLOR = '#10B981';
+const EXPENSE_COLOR = '#EF4444';
+const PRIMARY_COLOR = '#0062FF';
 
 const CATEGORY_PALETTE = [
-  '#6366f1', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981',
-  '#06b6d4', '#f97316', '#84cc16', '#14b8a6', '#a855f7',
-  '#ef4444', '#3b82f6',
+  '#0062FF', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981',
+  '#06B6D4', '#F97316', '#84CC16', '#14B8A6', '#A855F7',
+  '#EF4444', '#3B82F6',
 ];
 
 const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
@@ -798,7 +798,7 @@ function MemberAnalysisTab() {
                   {barData.map((_, i) => (
                     <Cell
                       key={i}
-                      fill={`rgba(99, 102, 241, ${1 - (i / Math.max(barData.length - 1, 1)) * 0.6})`}
+                      fill={`rgba(0, 98, 255, ${1 - (i / Math.max(barData.length - 1, 1)) * 0.6})`}
                     />
                   ))}
                 </Bar>
@@ -1009,11 +1009,8 @@ export default function StatisticsPage() {
     <div className="space-y-6 p-4 sm:p-6 max-w-5xl mx-auto">
       <h1 className="text-2xl font-bold tracking-tight">统计分析</h1>
 
-      <Tabs defaultValue="trend">
-        <TabsList className="w-full grid grid-cols-4">
-          <TabsTrigger value="trend" className="text-xs sm:text-sm">
-            月度趋势
-          </TabsTrigger>
+      <Tabs defaultValue="category">
+        <TabsList className="w-full grid grid-cols-3">
           <TabsTrigger value="category" className="text-xs sm:text-sm">
             分类分析
           </TabsTrigger>
@@ -1025,9 +1022,9 @@ export default function StatisticsPage() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="trend">
+        {/* <TabsContent value="trend">
           <MonthlyTrendTab />
-        </TabsContent>
+        </TabsContent> */}
         <TabsContent value="category">
           <CategoryBreakdownTab />
         </TabsContent>

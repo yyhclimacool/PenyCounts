@@ -234,8 +234,8 @@ export default function SettingsPage() {
   return (
     <div className="space-y-8 p-4 sm:p-6 max-w-3xl mx-auto">
       <div className="flex items-center gap-3">
-        <Settings className="h-6 w-6 text-muted-foreground" />
-        <h1 className="text-2xl font-bold tracking-tight">设置</h1>
+        <User className="h-6 w-6 text-muted-foreground" />
+        <h1 className="text-2xl font-bold tracking-tight">个人中心</h1>
       </div>
 
       {/* Profile Section */}

@@ -2,9 +2,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::errors::AppError;
-use crate::models::{Category, CreateCategoryRequest, CreateSubcategoryRequest, Subcategory};
+use crate::models::{Category, CategoryWithSubs, CreateCategoryRequest, CreateSubcategoryRequest, Subcategory};
 
-pub async fn get_all_categories(pool: &PgPool, user_id: Uuid) -> Result<Vec<Category>, AppError> {
+pub async fn get_all_categories_with_subs(pool: &PgPool, user_id: Uuid) -> Result<Vec<CategoryWithSubs>, AppError> {
     let categories = sqlx::query_as::<_, Category>(
         "SELECT * FROM categories WHERE user_id IS NULL OR user_id = $1 ORDER BY type, sort_order, name",
     )
@@ -12,7 +12,36 @@ pub async fn get_all_categories(pool: &PgPool, user_id: Uuid) -> Result<Vec<Cate
     .fetch_all(pool)
     .await?;
 
-    Ok(categories)
+    let subcategories = sqlx::query_as::<_, Subcategory>(
+        "SELECT s.* FROM subcategories s
+         INNER JOIN categories c ON s.category_id = c.id
+         WHERE (c.user_id IS NULL OR c.user_id = $1)
+           AND (s.user_id IS NULL OR s.user_id = $1)
+         ORDER BY s.sort_order, s.name",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut subs_map: std::collections::HashMap<Uuid, Vec<Subcategory>> = std::collections::HashMap::new();
+    for sub in subcategories {
+        subs_map.entry(sub.category_id).or_default().push(sub);
+    }
+
+    let result = categories
+        .into_iter()
+        .map(|cat| CategoryWithSubs {
+            subcategories: subs_map.remove(&cat.id).unwrap_or_default(),
+            id: cat.id,
+            user_id: cat.user_id,
+            name: cat.name,
+            r#type: cat.r#type,
+            icon: cat.icon,
+            sort_order: cat.sort_order,
+        })
+        .collect();
+
+    Ok(result)
 }
 
 pub async fn get_category(

@@ -52,7 +52,7 @@ export default function RegisterPage() {
       await register({ email, password, nickname });
       toast({
         title: '注册成功',
-        description: '验证邮件已发送，请查收邮箱后登录',
+        description: '请使用您的邮箱和密码登录',
       });
       navigate('/login');
     } catch (err: unknown) {

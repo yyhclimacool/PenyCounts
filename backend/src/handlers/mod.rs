@@ -13,6 +13,7 @@ use axum::{
     Router,
 };
 use sqlx::PgPool;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -138,6 +139,10 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
         )
         // AI
         .route(
+            "/api/ai/config",
+            axum::routing::get(ai::get_active_config).put(ai::upsert_config),
+        )
+        .route(
             "/api/ai/configs",
             axum::routing::get(ai::list_configs).post(ai::create_config),
         )
@@ -156,6 +161,7 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
         )
         // Health
         .route("/api/health", axum::routing::get(health))
+        .layer(CompressionLayer::new().br(true).gzip(true))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state)

@@ -18,7 +18,7 @@ export function AppLayout() {
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <div className="flex flex-1 flex-col overflow-hidden">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-background px-4 lg:px-6">
+        <header className="flex h-14 shrink-0 items-center justify-between border-b border-border/60 bg-background/80 glass px-4 lg:px-6">
           <Button
             variant="ghost"
             size="icon"

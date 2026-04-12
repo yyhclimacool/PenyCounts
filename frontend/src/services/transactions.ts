@@ -21,7 +21,7 @@ export interface CreateTransactionPayload {
   time: string;
   location?: string | null;
   note?: string | null;
-  members?: { member_name: string; share_amount: string }[];
+  members?: string[];
 }
 
 export interface UpdateTransactionPayload {
@@ -34,7 +34,7 @@ export interface UpdateTransactionPayload {
   time?: string;
   location?: string | null;
   note?: string | null;
-  members?: { member_name: string; share_amount: string }[];
+  members?: string[];
 }
 
 export async function list(
@@ -52,7 +52,7 @@ export async function create(payload: CreateTransactionPayload): Promise<Transac
 }
 
 export async function update(id: string, payload: UpdateTransactionPayload): Promise<Transaction> {
-  const { data } = await api.patch<Transaction>(`/transactions/${id}`, payload);
+  const { data } = await api.put<Transaction>(`/transactions/${id}`, payload);
   return data;
 }
 

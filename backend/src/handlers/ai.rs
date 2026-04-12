@@ -20,6 +20,30 @@ pub async fn list_configs(
     Ok(Json(configs))
 }
 
+pub async fn get_active_config(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<LlmConfig>, AppError> {
+    let configs = services::ai::get_llm_configs(&state.pool, auth.user_id).await?;
+    let active = configs.into_iter().find(|c| c.is_active)
+        .ok_or_else(|| AppError::NotFound("No active LLM config".to_string()))?;
+    Ok(Json(active))
+}
+
+pub async fn upsert_config(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<LlmConfigRequest>,
+) -> Result<Json<LlmConfig>, AppError> {
+    let configs = services::ai::get_llm_configs(&state.pool, auth.user_id).await?;
+    let config = if let Some(existing) = configs.into_iter().find(|c| c.is_active) {
+        services::ai::update_llm_config(&state.pool, auth.user_id, existing.id, req).await?
+    } else {
+        services::ai::create_llm_config(&state.pool, auth.user_id, req).await?
+    };
+    Ok(Json(config))
+}
+
 pub async fn create_config(
     State(state): State<AppState>,
     auth: AuthUser,

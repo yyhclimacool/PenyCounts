@@ -10,7 +10,7 @@ use crate::errors::AppError;
 use crate::middleware::AuthUser;
 use crate::models::{
     CreateTransactionRequest, PaginatedResponse, Transaction, TransactionFilter,
-    TransactionMember,
+    TransactionMember, TransactionWithMembers,
 };
 use crate::services;
 
@@ -18,10 +18,45 @@ pub async fn list_transactions(
     State(state): State<AppState>,
     auth: AuthUser,
     Query(filter): Query<TransactionFilter>,
-) -> Result<Json<PaginatedResponse<Transaction>>, AppError> {
+) -> Result<Json<PaginatedResponse<TransactionWithMembers>>, AppError> {
     let result =
         services::transaction::list_transactions(&state.pool, auth.user_id, filter).await?;
-    Ok(Json(result))
+
+    let txn_ids: Vec<Uuid> = result.data.iter().map(|t| t.id).collect();
+
+    let all_members = if txn_ids.is_empty() {
+        vec![]
+    } else {
+        sqlx::query_as::<_, TransactionMember>(
+            "SELECT * FROM transaction_members WHERE transaction_id = ANY($1) ORDER BY member_name",
+        )
+        .bind(&txn_ids)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default()
+    };
+
+    let mut members_map: std::collections::HashMap<Uuid, Vec<TransactionMember>> =
+        std::collections::HashMap::new();
+    for m in all_members {
+        members_map.entry(m.transaction_id).or_default().push(m);
+    }
+
+    let enriched: Vec<TransactionWithMembers> = result
+        .data
+        .into_iter()
+        .map(|tx| {
+            let members = members_map.remove(&tx.id).unwrap_or_default();
+            TransactionWithMembers { transaction: tx, members }
+        })
+        .collect();
+
+    Ok(Json(PaginatedResponse {
+        data: enriched,
+        total: result.total,
+        page: result.page,
+        per_page: result.per_page,
+    }))
 }
 
 pub async fn get_transaction(

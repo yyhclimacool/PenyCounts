@@ -10,12 +10,12 @@ const RegisterPage = lazy(() => import('@/pages/RegisterPage'));
 const VerifyEmailPage = lazy(() => import('@/pages/VerifyEmailPage'));
 const ForgotPasswordPage = lazy(() => import('@/pages/ForgotPasswordPage'));
 const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
-const DashboardPage = lazy(() => import('@/pages/DashboardPage'));
+// const DashboardPage = lazy(() => import('@/pages/DashboardPage'));
 const TransactionsPage = lazy(() => import('@/pages/TransactionsPage'));
-const SocialGiftsPage = lazy(() => import('@/pages/SocialGiftsPage'));
+// const SocialGiftsPage = lazy(() => import('@/pages/SocialGiftsPage'));
 const CategoriesPage = lazy(() => import('@/pages/CategoriesPage'));
 const StatisticsPage = lazy(() => import('@/pages/StatisticsPage'));
-const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
+// const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -87,12 +87,10 @@ export default function App() {
               </RequireAuth>
             }
           >
-            <Route index element={<DashboardPage />} />
+            <Route index element={<TransactionsPage />} />
             <Route path="transactions" element={<TransactionsPage />} />
-            <Route path="social-gifts" element={<SocialGiftsPage />} />
             <Route path="categories" element={<CategoriesPage />} />
             <Route path="statistics" element={<StatisticsPage />} />
-            <Route path="settings" element={<SettingsPage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

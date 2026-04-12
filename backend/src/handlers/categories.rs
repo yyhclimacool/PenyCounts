@@ -8,14 +8,14 @@ use uuid::Uuid;
 use crate::config::AppState;
 use crate::errors::AppError;
 use crate::middleware::AuthUser;
-use crate::models::{Category, CreateCategoryRequest, CreateSubcategoryRequest, Subcategory};
+use crate::models::{Category, CategoryWithSubs, CreateCategoryRequest, CreateSubcategoryRequest, Subcategory};
 use crate::services;
 
 pub async fn list_categories(
     State(state): State<AppState>,
     auth: AuthUser,
-) -> Result<Json<Vec<Category>>, AppError> {
-    let categories = services::category::get_all_categories(&state.pool, auth.user_id).await?;
+) -> Result<Json<Vec<CategoryWithSubs>>, AppError> {
+    let categories = services::category::get_all_categories_with_subs(&state.pool, auth.user_id).await?;
     Ok(Json(categories))
 }
 

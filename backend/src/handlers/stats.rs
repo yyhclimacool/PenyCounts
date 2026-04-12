@@ -45,8 +45,8 @@ pub async fn category_breakdown(
     let data = services::stats::category_breakdown(
         &state.pool,
         auth.user_id,
-        query.start_date,
-        query.end_date,
+        query.year,
+        query.month,
         query.r#type.as_deref(),
     )
     .await?;
@@ -61,8 +61,8 @@ pub async fn member_breakdown(
     let data = services::stats::member_breakdown(
         &state.pool,
         auth.user_id,
-        query.start_date,
-        query.end_date,
+        query.year,
+        query.month,
     )
     .await?;
     Ok(Json(data))

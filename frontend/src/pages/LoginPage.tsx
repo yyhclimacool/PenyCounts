@@ -54,18 +54,21 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-primary/5 via-background to-secondary/10 px-4">
-      <div className="w-full max-w-md">
-        {/* Logo */}
+    <div className="relative flex min-h-screen items-center justify-center px-4 overflow-hidden">
+      <div className="absolute inset-0 bg-gradient-to-br from-primary/8 via-background to-accent/20" />
+      <div className="absolute top-[-20%] right-[-10%] h-[500px] w-[500px] rounded-full bg-primary/5 blur-3xl" />
+      <div className="absolute bottom-[-15%] left-[-10%] h-[400px] w-[400px] rounded-full bg-accent/10 blur-3xl" />
+
+      <div className="relative z-10 w-full max-w-md animate-slide-up">
         <div className="mb-8 flex flex-col items-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/25">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-primary/80 text-primary-foreground shadow-lg shadow-primary/30 transition-transform hover:scale-105">
             <Wallet className="h-7 w-7" />
           </div>
-          <h1 className="mt-4 text-2xl font-bold text-foreground">PenyCounts</h1>
-          <p className="mt-1 text-sm text-muted-foreground">家庭记账，轻松管理</p>
+          <h1 className="mt-4 text-2xl font-extrabold tracking-tight bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">PenyCounts</h1>
+          <p className="mt-1 text-sm text-muted-foreground font-medium">智能家庭记账助手</p>
         </div>
 
-        <Card className="shadow-xl shadow-black/5">
+        <Card className="shadow-2xl shadow-black/8 border-border/60 backdrop-blur-sm">
           <CardHeader className="text-center">
             <CardTitle className="text-xl">登录</CardTitle>
             <CardDescription>输入您的账号信息以继续</CardDescription>

@@ -23,4 +23,16 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    target: 'es2022',
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router'],
+          'vendor-ui': ['lucide-react', 'dayjs'],
+          'vendor-charts': ['recharts'],
+        },
+      },
+    },
+  },
 });

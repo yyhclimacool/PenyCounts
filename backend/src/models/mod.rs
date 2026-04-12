@@ -37,6 +37,17 @@ pub struct Subcategory {
     pub sort_order: i32,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CategoryWithSubs {
+    pub id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub name: String,
+    pub r#type: String,
+    pub icon: String,
+    pub sort_order: i32,
+    pub subcategories: Vec<Subcategory>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Transaction {
     pub id: Uuid,
@@ -51,6 +62,13 @@ pub struct Transaction {
     pub location: Option<String>,
     pub note: Option<String>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TransactionWithMembers {
+    #[serde(flatten)]
+    pub transaction: Transaction,
+    pub members: Vec<TransactionMember>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -219,15 +237,15 @@ pub struct StatsYearMonthQuery {
 
 #[derive(Debug, Deserialize)]
 pub struct StatsBreakdownQuery {
-    pub start_date: NaiveDate,
-    pub end_date: NaiveDate,
+    pub year: i32,
+    pub month: Option<u32>,
     pub r#type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct StatsMemberQuery {
-    pub start_date: NaiveDate,
-    pub end_date: NaiveDate,
+    pub year: i32,
+    pub month: Option<u32>,
 }
 
 // ── Response DTOs ────────────────────────────────────────────────────

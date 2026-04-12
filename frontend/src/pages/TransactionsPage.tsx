@@ -4,7 +4,6 @@ import dayjs from 'dayjs';
 import {
   Plus,
   Search,
-  MapPin,
   Pencil,
   Trash2,
   ReceiptText,
@@ -12,11 +11,6 @@ import {
   ChevronRight,
   X,
   Loader2,
-  ChevronDown,
-  ChevronUp,
-  Clock,
-  StickyNote,
-  Users,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -45,7 +39,7 @@ import * as transactionsService from '@/services/transactions';
 import * as categoriesService from '@/services/categories';
 import * as membersService from '@/services/members';
 import type { Transaction, Category, Member } from '@/types';
-import { formatCurrency, formatDate, formatTime } from '@/utils/format';
+import { formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import { useToast } from '@/hooks/useToast';
 
@@ -100,7 +94,6 @@ export default function TransactionsPage() {
   const [memberInput, setMemberInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
@@ -147,24 +140,37 @@ export default function TransactionsPage() {
     }
   }, [searchParams, setSearchParams]);
 
+  const enrichedTransactions = useMemo(() => {
+    const catMap = new Map(categories.map((c) => [c.id, c]));
+    const subMap = new Map(
+      categories.flatMap((c) => (c.subcategories ?? []).map((s) => [s.id, s])),
+    );
+    return transactions.map((tx) => ({
+      ...tx,
+      category: catMap.get(tx.category_id),
+      subcategory: tx.subcategory_id ? subMap.get(tx.subcategory_id) : undefined,
+    }));
+  }, [transactions, categories]);
+
   const filteredTransactions = useMemo(() => {
-    if (!searchText.trim()) return transactions;
+    if (!searchText.trim()) return enrichedTransactions;
     const q = searchText.toLowerCase();
-    return transactions.filter(
+    return enrichedTransactions.filter(
       (tx) =>
         tx.category?.name?.toLowerCase().includes(q) ||
         tx.subcategory?.name?.toLowerCase().includes(q) ||
         tx.location?.toLowerCase().includes(q) ||
         tx.note?.toLowerCase().includes(q),
     );
-  }, [transactions, searchText]);
+  }, [enrichedTransactions, searchText]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, Transaction[]>();
     for (const tx of filteredTransactions) {
-      const arr = map.get(tx.date) ?? [];
+      const monthKey = tx.date.slice(0, 7);
+      const arr = map.get(monthKey) ?? [];
       arr.push(tx);
-      map.set(tx.date, arr);
+      map.set(monthKey, arr);
     }
     return Array.from(map.entries()).sort(([a], [b]) => b.localeCompare(a));
   }, [filteredTransactions]);
@@ -220,14 +226,7 @@ export default function TransactionsPage() {
     setSubmitting(true);
     try {
       const members =
-        memberTags.length > 0
-          ? memberTags.map((name) => ({
-              member_name: name,
-              share_amount: (
-                parseFloat(form.amount) / memberTags.length
-              ).toFixed(2),
-            }))
-          : undefined;
+        memberTags.length > 0 ? memberTags : undefined;
 
       const payload = {
         type: form.type,
@@ -427,183 +426,149 @@ export default function TransactionsPage() {
         </Card>
       ) : (
         <div className="space-y-4">
-          {grouped.map(([date, txs]) => (
-            <div key={date}>
+          {grouped.map(([monthKey, txs]) => {
+            const monthIncome = txs
+              .filter((t) => t.type === 'income')
+              .reduce((s, t) => s + parseFloat(t.amount), 0);
+            const monthExpense = txs
+              .filter((t) => t.type === 'expense')
+              .reduce((s, t) => s + parseFloat(t.amount), 0);
+            return (
+            <div key={monthKey}>
               <div className="flex items-center gap-2 mb-2 px-1">
                 <span className="text-sm font-semibold text-foreground">
-                  {formatDate(date)}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  ({dayjs(date).format('ddd')})
+                  {dayjs(monthKey + '-01').format('YYYY年M月')}
                 </span>
                 <div className="flex-1 h-px bg-border" />
+                <span className="text-xs text-income tabular-nums">
+                  +{formatCurrency(monthIncome, 'CNY')}
+                </span>
+                <span className="text-xs text-expense tabular-nums">
+                  -{formatCurrency(monthExpense, 'CNY')}
+                </span>
                 <span className="text-xs text-muted-foreground tabular-nums">
-                  {txs.length} 笔
+                  {txs.length}笔
                 </span>
               </div>
               <Card>
-                <CardContent className="p-0 divide-y divide-border">
-                  {txs.map((tx) => {
-                    const isExpanded = expandedId === tx.id;
-                    return (
-                      <div key={tx.id}>
-                        <div
-                          className="flex items-center gap-3 px-4 py-3.5 cursor-pointer hover:bg-muted/30 transition-colors"
-                          onClick={() =>
-                            setExpandedId(isExpanded ? null : tx.id)
-                          }
-                        >
-                          <span className="text-xl w-9 h-9 flex items-center justify-center rounded-lg bg-muted/60 shrink-0">
-                            {tx.category?.icon ?? '📝'}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium truncate">
-                              {tx.category?.name ?? '未分类'}
-                              {tx.subcategory && (
-                                <span className="text-muted-foreground font-normal">
-                                  {' / '}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/40 text-xs text-muted-foreground">
+                        <th className="px-4 py-2.5 text-left font-medium">日期</th>
+                        <th className="px-3 py-2.5 text-left font-medium">一级分类</th>
+                        <th className="px-3 py-2.5 text-left font-medium">二级分类</th>
+                        <th className="px-3 py-2.5 text-center font-medium">收支</th>
+                        <th className="px-3 py-2.5 text-right font-medium">流水</th>
+                        <th className="px-3 py-2.5 text-left font-medium">人员</th>
+                        <th className="px-3 py-2.5 text-left font-medium">备注</th>
+                        <th className="px-3 py-2.5 text-right font-medium w-20">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/60">
+                      {txs.map((tx) => {
+                        const amt = parseFloat(tx.amount);
+                        const signedAmt = tx.type === 'expense' ? -amt : amt;
+                        return (
+                          <tr
+                            key={tx.id}
+                            className="content-auto hover:bg-muted/40 transition-colors"
+                          >
+                            <td className="px-4 py-3 whitespace-nowrap tabular-nums">
+                              {dayjs(tx.date).format('MM-DD')}
+                            </td>
+                            <td className="px-3 py-3 whitespace-nowrap">
+                              <span className="inline-flex items-center gap-1.5">
+                                <span className="text-base">{tx.category?.icon ?? '📝'}</span>
+                                {tx.category?.name ?? '未分类'}
+                              </span>
+                            </td>
+                            <td className="px-3 py-3 whitespace-nowrap text-muted-foreground">
+                              {tx.subcategory ? (
+                                <span className="inline-flex items-center gap-1.5">
+                                  <span className="text-base">{tx.subcategory.icon}</span>
                                   {tx.subcategory.name}
                                 </span>
+                              ) : (
+                                '-'
                               )}
-                            </p>
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
-                              {tx.time && (
-                                <span className="inline-flex items-center gap-0.5">
-                                  <Clock className="h-3 w-3" />
-                                  {formatTime(tx.time)}
-                                </span>
-                              )}
-                              {tx.location && (
-                                <span className="inline-flex items-center gap-0.5">
-                                  <MapPin className="h-3 w-3" />
-                                  {tx.location}
-                                </span>
-                              )}
-                              {tx.members && tx.members.length > 0 && (
-                                <span className="inline-flex items-center gap-0.5">
-                                  <Users className="h-3 w-3" />
-                                  {tx.members.length}人
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <span
-                            className={cn(
-                              'text-sm font-semibold tabular-nums whitespace-nowrap',
-                              tx.type === 'income'
-                                ? 'text-income'
-                                : 'text-expense',
-                            )}
-                          >
-                            {tx.type === 'income' ? '+' : '-'}
-                            {formatCurrency(tx.amount, tx.currency)}
-                          </span>
-                          {isExpanded ? (
-                            <ChevronUp className="h-4 w-4 text-muted-foreground shrink-0" />
-                          ) : (
-                            <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
-                          )}
-                        </div>
-
-                        {isExpanded && (
-                          <div className="px-4 pb-4 pt-1 bg-muted/20 space-y-3 animate-fade-in">
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-                              <div>
-                                <span className="text-xs text-muted-foreground">
-                                  日期
-                                </span>
-                                <p className="font-medium">
-                                  {formatDate(tx.date)}
-                                </p>
-                              </div>
-                              <div>
-                                <span className="text-xs text-muted-foreground">
-                                  时间
-                                </span>
-                                <p className="font-medium">
-                                  {formatTime(tx.time) || '-'}
-                                </p>
-                              </div>
-                              <div>
-                                <span className="text-xs text-muted-foreground">
-                                  地点
-                                </span>
-                                <p className="font-medium">
-                                  {tx.location || '-'}
-                                </p>
-                              </div>
-                              <div>
-                                <span className="text-xs text-muted-foreground">
-                                  币种
-                                </span>
-                                <p className="font-medium">{tx.currency}</p>
-                              </div>
-                            </div>
-
-                            {tx.note && (
-                              <div className="flex items-start gap-2 text-sm">
-                                <StickyNote className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                                <p className="text-muted-foreground">
-                                  {tx.note}
-                                </p>
-                              </div>
-                            )}
-
-                            {tx.members && tx.members.length > 0 && (
-                              <div className="flex flex-wrap gap-1.5">
-                                {tx.members.map((m) => (
-                                  <Badge
-                                    key={m.id}
-                                    variant="secondary"
-                                    className="text-xs"
-                                  >
-                                    {m.member_name}
-                                    <span className="ml-1 text-muted-foreground">
-                                      {formatCurrency(
-                                        m.share_amount,
-                                        tx.currency,
-                                      )}
-                                    </span>
-                                  </Badge>
-                                ))}
-                              </div>
-                            )}
-
-                            <div className="flex gap-2 pt-1">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openEditDialog(tx);
-                                }}
+                            </td>
+                            <td className="px-3 py-3 text-center">
+                              <Badge
+                                variant={tx.type === 'income' ? 'default' : 'secondary'}
+                                className={cn(
+                                  'text-xs font-medium',
+                                  tx.type === 'income'
+                                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                                    : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+                                )}
                               >
-                                <Pencil className="h-3.5 w-3.5" />
-                                编辑
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="text-destructive hover:text-destructive hover:bg-destructive/10 hover:border-destructive/30"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setDeletingId(tx.id);
-                                  setDeleteDialogOpen(true);
-                                }}
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                                删除
-                              </Button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </CardContent>
+                                {tx.type === 'income' ? '收入' : '支出'}
+                              </Badge>
+                            </td>
+                            <td
+                              className={cn(
+                                'px-3 py-3 text-right font-semibold tabular-nums whitespace-nowrap',
+                                tx.type === 'income'
+                                  ? 'text-income'
+                                  : 'text-expense',
+                              )}
+                            >
+                              {signedAmt >= 0 ? '+' : ''}{signedAmt.toFixed(2)}
+                            </td>
+                            <td className="px-3 py-3">
+                              {tx.members && tx.members.length > 0 ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {tx.members.map((m) => (
+                                    <Badge
+                                      key={m.id}
+                                      variant="outline"
+                                      className="text-xs"
+                                    >
+                                      {m.member_name}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-muted-foreground">-</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-3 text-muted-foreground max-w-[200px] truncate">
+                              {tx.note || '-'}
+                            </td>
+                            <td className="px-3 py-3 text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7"
+                                  onClick={() => openEditDialog(tx)}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                  onClick={() => {
+                                    setDeletingId(tx.id);
+                                    setDeleteDialogOpen(true);
+                                  }}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </Card>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
