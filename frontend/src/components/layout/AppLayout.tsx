@@ -14,11 +14,16 @@ export function AppLayout() {
   const { isOpen: chatOpen, setOpen: setChatOpen } = useChatStore();
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="flex h-screen overflow-hidden bg-transparent">
+      <div className="fixed inset-0 -z-10 overflow-hidden">
+        <div className="absolute -top-[40%] -right-[20%] h-[80vh] w-[80vh] rounded-full bg-primary/5 blur-[100px]" />
+        <div className="absolute -bottom-[30%] -left-[20%] h-[70vh] w-[70vh] rounded-full bg-accent/8 blur-[100px]" />
+      </div>
+
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <div className="flex flex-1 flex-col overflow-hidden">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-border/60 bg-background/80 glass px-4 lg:px-6">
+        <header className="flex h-14 shrink-0 items-center justify-between bg-card/60 glass px-4 lg:px-6">
           <Button
             variant="ghost"
             size="icon"

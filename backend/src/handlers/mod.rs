@@ -43,6 +43,7 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
         // Auth (public)
         .route("/api/auth/register", axum::routing::post(auth::register))
         .route("/api/auth/login", axum::routing::post(auth::login))
+        .route("/api/auth/profile", axum::routing::put(auth::update_profile))
         // Categories
         .route(
             "/api/categories",

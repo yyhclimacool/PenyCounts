@@ -126,11 +126,20 @@ pub struct ChatMessage {
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
     pub username: String,
+    pub password: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
     pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateProfileRequest {
+    pub username: Option<String>,
+    pub current_password: Option<String>,
+    pub new_password: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

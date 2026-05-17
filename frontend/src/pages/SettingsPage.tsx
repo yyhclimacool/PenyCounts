@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import {
-  Settings,
   User,
   Bot,
   Users,
@@ -44,6 +43,7 @@ import {
 import { useAuthStore } from '@/stores/authStore';
 import * as aiService from '@/services/ai';
 import * as membersService from '@/services/members';
+import { updateProfile } from '@/services/auth';
 import type { LlmConfig, Member } from '@/types';
 import { cn } from '@/utils/cn';
 import { useToast } from '@/hooks/useToast';
@@ -65,6 +65,15 @@ const defaultLlmForm: LlmForm = {
 export default function SettingsPage() {
   const { addToast } = useToast();
   const user = useAuthStore((s) => s.user);
+  const setUser = useAuthStore((s) => s.setUser);
+  const authLogin = useAuthStore((s) => s.login);
+
+  const [profileEditing, setProfileEditing] = useState(false);
+  const [profileUsername, setProfileUsername] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [profileSaving, setProfileSaving] = useState(false);
 
   const [llmConfig, setLlmConfig] = useState<LlmConfig | null>(null);
   const [llmForm, setLlmForm] = useState<LlmForm>(defaultLlmForm);
@@ -242,30 +251,154 @@ export default function SettingsPage() {
       {/* Profile Section */}
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-primary/10 rounded-xl">
-              <User className="h-5 w-5 text-primary" />
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-primary/10 rounded-xl">
+                <User className="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <CardTitle>个人信息</CardTitle>
+                <CardDescription>管理您的账户信息</CardDescription>
+              </div>
             </div>
-            <div>
-              <CardTitle>个人信息</CardTitle>
-              <CardDescription>您的账户信息</CardDescription>
-            </div>
+            {user && !profileEditing && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setProfileEditing(true);
+                  setProfileUsername(user.username);
+                  setCurrentPassword('');
+                  setNewPassword('');
+                  setConfirmNewPassword('');
+                }}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                编辑
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent>
-          {user ? (
+          {!user ? (
+            <p className="text-sm text-muted-foreground">未登录</p>
+          ) : !profileEditing ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <Label className="text-muted-foreground">用户名</Label>
                 <p className="text-sm font-medium mt-1">{user.username}</p>
               </div>
               <div>
-                <Label className="text-muted-foreground">昵称</Label>
-                <p className="text-sm font-medium mt-1">{user.nickname}</p>
+                <Label className="text-muted-foreground">密码</Label>
+                <p className="text-sm font-medium mt-1">••••••</p>
               </div>
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">未登录</p>
+            <div className="space-y-4">
+              <div>
+                <Label>用户名</Label>
+                <Input
+                  value={profileUsername}
+                  onChange={(e) => setProfileUsername(e.target.value)}
+                  placeholder="输入新用户名"
+                  className="mt-1.5"
+                />
+              </div>
+              <Separator />
+              <p className="text-sm text-muted-foreground">修改密码（不修改可留空）</p>
+              <div>
+                <Label>当前密码</Label>
+                <Input
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="输入当前密码"
+                  className="mt-1.5"
+                  autoComplete="current-password"
+                />
+              </div>
+              <div>
+                <Label>新密码</Label>
+                <Input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="至少4个字符"
+                  className="mt-1.5"
+                  autoComplete="new-password"
+                />
+              </div>
+              <div>
+                <Label>确认新密码</Label>
+                <Input
+                  type="password"
+                  value={confirmNewPassword}
+                  onChange={(e) => setConfirmNewPassword(e.target.value)}
+                  placeholder="再次输入新密码"
+                  className="mt-1.5"
+                  autoComplete="new-password"
+                />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setProfileEditing(false)}
+                  disabled={profileSaving}
+                >
+                  取消
+                </Button>
+                <Button
+                  onClick={async () => {
+                    if (!profileUsername.trim()) {
+                      addToast({ title: '用户名不能为空', variant: 'destructive' });
+                      return;
+                    }
+                    if (newPassword && newPassword.length < 4) {
+                      addToast({ title: '新密码至少4个字符', variant: 'destructive' });
+                      return;
+                    }
+                    if (newPassword && newPassword !== confirmNewPassword) {
+                      addToast({ title: '两次密码不一致', variant: 'destructive' });
+                      return;
+                    }
+                    if (newPassword && !currentPassword) {
+                      addToast({ title: '请输入当前密码', variant: 'destructive' });
+                      return;
+                    }
+                    setProfileSaving(true);
+                    try {
+                      const payload: Record<string, string> = {};
+                      if (profileUsername.trim() !== user.username) {
+                        payload.username = profileUsername.trim();
+                      }
+                      if (newPassword) {
+                        payload.current_password = currentPassword;
+                        payload.new_password = newPassword;
+                      }
+                      if (Object.keys(payload).length === 0) {
+                        setProfileEditing(false);
+                        return;
+                      }
+                      const resp = await updateProfile(payload);
+                      authLogin(resp.token, resp.user);
+                      setProfileEditing(false);
+                      addToast({ title: '个人信息已更新' });
+                    } catch (err: unknown) {
+                      const msg =
+                        (err as { response?: { data?: { error?: string } } })
+                          ?.response?.data?.error ?? '更新失败';
+                      addToast({ title: msg, variant: 'destructive' });
+                    } finally {
+                      setProfileSaving(false);
+                    }
+                  }}
+                  disabled={profileSaving}
+                >
+                  {profileSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                  保存
+                </Button>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>

@@ -25,6 +25,8 @@
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
+  --color-glass-border: var(--glass-border);
+  --color-glass-shadow: var(--glass-shadow);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -92,11 +94,11 @@
 }
 
 :root {
-  --background: #F8F9FC;
+  --background: #F0F2F8;
   --foreground: #0F172A;
-  --card: #ffffff;
+  --card: rgba(255, 255, 255, 0.72);
   --card-foreground: #0F172A;
-  --popover: #ffffff;
+  --popover: rgba(255, 255, 255, 0.82);
   --popover-foreground: #0F172A;
   --primary: #4F46E5;
   --primary-foreground: #ffffff;
@@ -113,19 +115,21 @@
   --ring: #4F46E5;
   --income: #059669;
   --expense: #DC2626;
-  --sidebar: #FAFBFE;
+  --sidebar: rgba(255, 255, 255, 0.6);
   --sidebar-foreground: #475569;
   --sidebar-accent: #EEF2FF;
+  --glass-border: rgba(255, 255, 255, 0.5);
+  --glass-shadow: rgba(99, 102, 241, 0.08);
   --radius: 0.625rem;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0C0F1A;
+    --background: #080B14;
     --foreground: #F1F5F9;
-    --card: #161B2E;
+    --card: rgba(22, 27, 46, 0.72);
     --card-foreground: #F1F5F9;
-    --popover: #161B2E;
+    --popover: rgba(22, 27, 46, 0.82);
     --popover-foreground: #F1F5F9;
     --primary: #818CF8;
     --primary-foreground: #0F0E2A;
@@ -142,9 +146,11 @@
     --ring: #818CF8;
     --income: #34D399;
     --expense: #F87171;
-    --sidebar: #0F1326;
+    --sidebar: rgba(15, 19, 38, 0.7);
     --sidebar-foreground: #CBD5E1;
     --sidebar-accent: #1E1B4B;
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --glass-shadow: rgba(129, 140, 248, 0.1);
   }
 }
 
@@ -158,6 +164,10 @@
   body {
     margin: 0;
     background-color: var(--background);
+    background-image:
+      radial-gradient(ellipse at top left, color-mix(in srgb, var(--primary) 8%, transparent), transparent 50%),
+      radial-gradient(ellipse at bottom right, color-mix(in srgb, var(--accent) 12%, transparent), transparent 50%);
+    background-attachment: fixed;
     color: var(--foreground);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -193,8 +203,10 @@
   .stagger-5 { animation-delay: 250ms; }
 
   .glass {
-    backdrop-filter: blur(12px) saturate(180%);
-    -webkit-backdrop-filter: blur(12px) saturate(180%);
+    backdrop-filter: blur(16px) saturate(180%);
+    -webkit-backdrop-filter: blur(16px) saturate(180%);
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 8px 32px var(--glass-shadow);
   }
 
   .content-auto {

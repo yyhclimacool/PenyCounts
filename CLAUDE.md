@@ -42,7 +42,7 @@ PostgreSQL 15. Migrations run automatically on backend startup via `sqlx::migrat
 
 ## Architecture
 
-**Three-service Docker Compose:** postgres → backend (Axum :8080) → frontend (Nginx :80, reverse-proxies `/api/` to backend).
+**Three-service Docker Compose:** postgres → backend (Axum :8080) → frontend (Nginx :80, reverse-proxies `/api/` to backend). Backend Dockerfile uses multi-stage "dummy build" to cache Rust crate compilation separately from app code.
 
 **Backend layers:** `handlers/` (HTTP routing) → `services/` (business logic) → SQLx direct queries (no ORM). Each domain module has its own handler and service file. All routes defined in `handlers/mod.rs::create_router()`.
 
@@ -50,13 +50,18 @@ PostgreSQL 15. Migrations run automatically on backend startup via `sqlx::migrat
 
 **Auth flow:** JWT (HS256) stored in localStorage, attached via Axios interceptor. 401 response triggers logout + redirect.
 
-**AI chat:** Backend proxies user messages to a user-configured OpenAI-compatible LLM endpoint. Responses stream via SSE (`POST /api/ai/chat`). System prompt includes user's category tree and defines `create_transaction`/`query_transactions` tools.
+**Auth:** Argon2 password hashing in `services/auth.rs`. Endpoints: `POST /api/auth/register`, `POST /api/auth/login`, `PUT /api/auth/profile` (change username/password, requires current password).
+
+**AI chat:** Backend proxies user messages to a user-configured OpenAI-compatible LLM endpoint. Responses stream via SSE (`POST /api/ai/chat`). System prompt includes user's category tree and defines `create_transaction`/`query_transactions` tools. `POST /api/ai/test-connection` validates LLM config without streaming.
 
 ## Key Conventions
 
 - UI components follow shadcn/ui patterns (Radix UI primitives + CVA for variants) in `frontend/src/components/ui/`
 - TailwindCSS v4 with `@tailwindcss/vite` plugin — theme uses CSS custom properties defined in `src/index.css`
 - Semantic color tokens: `primary` (indigo), `income` (green), `expense` (red), `muted`, `destructive`
+- **Glassmorphism UI**: Cards/dialogs use semi-transparent backgrounds (`rgba`) + `.glass` utility (backdrop-blur + glass-border + glass-shadow). New components should apply `glass` class for consistency rather than opaque `bg-card` with manual borders.
+- Theme follows system preference via `@media (prefers-color-scheme: dark)` — no manual toggle. Custom tokens `--glass-border` and `--glass-shadow` adapt per theme.
+- Auth uses argon2 password hashing. Login/register require username + password.
 - Database amounts use `NUMERIC(15,2)`, serialized as strings in JSON via `serde(with-str)`
 - System-default categories have `user_id IS NULL`; user-created categories have `user_id` set
 - All protected API endpoints require `Authorization: Bearer <JWT>` header

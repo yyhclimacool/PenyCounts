@@ -23,6 +23,7 @@ export default function LoginPage() {
   const { toast } = useToast();
 
   const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -34,17 +35,21 @@ export default function LoginPage() {
       setError('请输入用户名');
       return;
     }
+    if (!password) {
+      setError('请输入密码');
+      return;
+    }
 
     setLoading(true);
     try {
-      const data = await loginApi({ username: username.trim() });
+      const data = await loginApi({ username: username.trim(), password });
       authLogin(data.token, data.user);
       toast({ title: '登录成功', description: `欢迎回来，${data.user.nickname}！` });
       navigate('/');
     } catch (err: unknown) {
       const message =
         (err as { response?: { data?: { error?: string } } })?.response?.data
-          ?.error ?? '登录失败，用户不存在';
+          ?.error ?? '登录失败，用户名或密码错误';
       setError(message);
     } finally {
       setLoading(false);
@@ -69,7 +74,7 @@ export default function LoginPage() {
         <Card className="shadow-2xl shadow-black/8 border-border/60 backdrop-blur-sm">
           <CardHeader className="text-center">
             <CardTitle className="text-xl">登录</CardTitle>
-            <CardDescription>输入用户名以继续</CardDescription>
+            <CardDescription>输入用户名和密码以继续</CardDescription>
           </CardHeader>
 
           <form onSubmit={handleSubmit}>
@@ -90,6 +95,19 @@ export default function LoginPage() {
                   onChange={(e) => setUsername(e.target.value)}
                   autoComplete="username"
                   autoFocus
+                  required
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="password">密码</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="请输入密码"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
                   required
                 />
               </div>
