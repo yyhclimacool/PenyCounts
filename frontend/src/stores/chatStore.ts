@@ -83,6 +83,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
             return { messages: msgs };
           });
         },
+        onToolResult: (data) => {
+          if (data.summary) {
+            full += data.summary;
+            const content = full;
+            set((s) => {
+              const msgs = s.messages.slice();
+              for (let i = msgs.length - 1; i >= 0; i--) {
+                if (msgs[i].isStreaming) {
+                  msgs[i] = { ...msgs[i], content };
+                  break;
+                }
+              }
+              return { messages: msgs };
+            });
+          } else if (data.error) {
+            full += `\n\n记账失败: ${data.error}`;
+            const content = full;
+            set((s) => {
+              const msgs = s.messages.slice();
+              for (let i = msgs.length - 1; i >= 0; i--) {
+                if (msgs[i].isStreaming) {
+                  msgs[i] = { ...msgs[i], content };
+                  break;
+                }
+              }
+              return { messages: msgs };
+            });
+          }
+        },
         onError: (err) => {
           set((s) => {
             const msgs = s.messages.slice();

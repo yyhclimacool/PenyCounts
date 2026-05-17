@@ -27,10 +27,16 @@ export default defineConfig({
     target: 'es2022',
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router'],
-          'vendor-ui': ['lucide-react', 'dayjs'],
-          'vendor-charts': ['recharts'],
+        manualChunks(id) {
+          if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/') || id.includes('node_modules/react-router')) {
+            return 'vendor-react';
+          }
+          if (id.includes('node_modules/lucide-react') || id.includes('node_modules/dayjs')) {
+            return 'vendor-ui';
+          }
+          if (id.includes('node_modules/recharts')) {
+            return 'vendor-charts';
+          }
         },
       },
     },

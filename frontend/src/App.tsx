@@ -7,15 +7,12 @@ import { Toaster } from '@/components/ui/toast';
 
 const LoginPage = lazy(() => import('@/pages/LoginPage'));
 const RegisterPage = lazy(() => import('@/pages/RegisterPage'));
-const VerifyEmailPage = lazy(() => import('@/pages/VerifyEmailPage'));
-const ForgotPasswordPage = lazy(() => import('@/pages/ForgotPasswordPage'));
-const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
 // const DashboardPage = lazy(() => import('@/pages/DashboardPage'));
 const TransactionsPage = lazy(() => import('@/pages/TransactionsPage'));
 // const SocialGiftsPage = lazy(() => import('@/pages/SocialGiftsPage'));
 const CategoriesPage = lazy(() => import('@/pages/CategoriesPage'));
 const StatisticsPage = lazy(() => import('@/pages/StatisticsPage'));
-// const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
+const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -62,23 +59,6 @@ export default function App() {
               </RedirectIfAuth>
             }
           />
-          <Route path="/verify-email" element={<VerifyEmailPage />} />
-          <Route
-            path="/forgot-password"
-            element={
-              <RedirectIfAuth>
-                <ForgotPasswordPage />
-              </RedirectIfAuth>
-            }
-          />
-          <Route
-            path="/reset-password"
-            element={
-              <RedirectIfAuth>
-                <ResetPasswordPage />
-              </RedirectIfAuth>
-            }
-          />
 
           <Route
             element={
@@ -91,6 +71,7 @@ export default function App() {
             <Route path="transactions" element={<TransactionsPage />} />
             <Route path="categories" element={<CategoriesPage />} />
             <Route path="statistics" element={<StatisticsPage />} />
+            <Route path="settings" element={<SettingsPage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

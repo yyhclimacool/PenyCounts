@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Wallet, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { Wallet, Loader2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,9 +22,7 @@ export default function LoginPage() {
   const authLogin = useAuthStore((s) => s.login);
   const { toast } = useToast();
 
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
+  const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -32,21 +30,21 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
 
-    if (!email.trim() || !password.trim()) {
-      setError('请填写邮箱和密码');
+    if (!username.trim()) {
+      setError('请输入用户名');
       return;
     }
 
     setLoading(true);
     try {
-      const data = await loginApi({ email, password });
+      const data = await loginApi({ username: username.trim() });
       authLogin(data.token, data.user);
       toast({ title: '登录成功', description: `欢迎回来，${data.user.nickname}！` });
       navigate('/');
     } catch (err: unknown) {
       const message =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data
-          ?.detail ?? '登录失败，请检查邮箱和密码';
+        (err as { response?: { data?: { error?: string } } })?.response?.data
+          ?.error ?? '登录失败，用户不存在';
       setError(message);
     } finally {
       setLoading(false);
@@ -71,7 +69,7 @@ export default function LoginPage() {
         <Card className="shadow-2xl shadow-black/8 border-border/60 backdrop-blur-sm">
           <CardHeader className="text-center">
             <CardTitle className="text-xl">登录</CardTitle>
-            <CardDescription>输入您的账号信息以继续</CardDescription>
+            <CardDescription>输入用户名以继续</CardDescription>
           </CardHeader>
 
           <form onSubmit={handleSubmit}>
@@ -83,51 +81,17 @@ export default function LoginPage() {
               )}
 
               <div className="space-y-2">
-                <Label htmlFor="email">邮箱</Label>
+                <Label htmlFor="username">用户名</Label>
                 <Input
-                  id="email"
-                  type="email"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  autoComplete="email"
+                  id="username"
+                  type="text"
+                  placeholder="请输入用户名"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  autoComplete="username"
+                  autoFocus
                   required
                 />
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="password">密码</Label>
-                  <Link
-                    to="/forgot-password"
-                    className="text-xs text-primary hover:text-primary/80 transition-colors"
-                  >
-                    忘记密码？
-                  </Link>
-                </div>
-                <div className="relative">
-                  <Input
-                    id="password"
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    autoComplete="current-password"
-                    required
-                  />
-                  <button
-                    type="button"
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                    onClick={() => setShowPassword((v) => !v)}
-                    tabIndex={-1}
-                  >
-                    {showPassword ? (
-                      <EyeOff className="h-4 w-4" />
-                    ) : (
-                      <Eye className="h-4 w-4" />
-                    )}
-                  </button>
-                </div>
               </div>
             </CardContent>
 

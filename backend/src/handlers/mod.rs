@@ -43,18 +43,6 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
         // Auth (public)
         .route("/api/auth/register", axum::routing::post(auth::register))
         .route("/api/auth/login", axum::routing::post(auth::login))
-        .route(
-            "/api/auth/verify-email",
-            axum::routing::get(auth::verify_email),
-        )
-        .route(
-            "/api/auth/forgot-password",
-            axum::routing::post(auth::forgot_password),
-        )
-        .route(
-            "/api/auth/reset-password",
-            axum::routing::post(auth::reset_password),
-        )
         // Categories
         .route(
             "/api/categories",
@@ -163,6 +151,7 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
             axum::routing::post(ai::activate_config),
         )
         .route("/api/ai/chat", axum::routing::post(ai::chat))
+        .route("/api/ai/test-connection", axum::routing::post(ai::test_connection))
         .route(
             "/api/ai/chat/history",
             axum::routing::get(ai::chat_history).delete(ai::clear_history),

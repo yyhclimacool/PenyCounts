@@ -1,32 +1,35 @@
-# syntax=docker/dockerfile:1
+# =============================================================================
+# Stage 1 — cache dependencies
+# =============================================================================
+FROM docker.m.daocloud.io/library/rust:1-slim-bookworm AS deps
 
-# =============================================================================
-# Stage 1 — cargo-chef: compute dependency recipe (cached layer boundary)
-# =============================================================================
-FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR /app
 
-FROM chef AS planner
-COPY backend/Cargo.toml backend/Cargo.lock ./
-COPY backend/src ./src
-RUN cargo chef prepare --recipe-path recipe.json
-
-# =============================================================================
-# Stage 2 — cargo-chef: build dependencies, then compile application
-# =============================================================================
-FROM chef AS builder
-COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 
 COPY backend/Cargo.toml backend/Cargo.lock ./
+
+# Create a dummy main.rs so cargo can resolve and download all dependencies
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN cargo build --release --locked
+# Remove the dummy build artifacts (but keep downloaded crates in registry cache)
+RUN rm -rf src target/release/deps/penycounts*
+
+# =============================================================================
+# Stage 2 — build the real application
+# =============================================================================
+FROM deps AS builder
+
 COPY backend/src ./src
 COPY backend/migrations ./migrations
-RUN cargo build --release --locked
+
+# Touch main.rs to ensure it's recompiled (dependencies are already built)
+RUN touch src/main.rs && cargo build --release --locked
 
 # =============================================================================
 # Stage 3 — minimal runtime
 # =============================================================================
-FROM debian:bookworm-slim AS runtime
+FROM docker.m.daocloud.io/library/debian:bookworm-slim AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
@@ -38,6 +41,8 @@ WORKDIR /app
 
 COPY --from=builder /app/target/release/penycounts-backend /usr/local/bin/penycounts-backend
 COPY --from=builder /app/migrations /app/migrations
+
+RUN mkdir -p /app/logs && chown penycounts:penycounts /app/logs
 
 USER penycounts
 

@@ -137,44 +137,45 @@ export default function SettingsPage() {
   }
 
   async function handleTestConnection() {
-    setTesting(true);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    const url = llmConfig?.api_url || llmForm.api_url;
+    const key = llmConfig?.api_key || llmForm.api_key;
+    const model = llmConfig?.model_name || llmForm.model_name;
 
-    let gotResponse = false;
+    if (!url.trim()) {
+      addToast({ title: '请先填写 API 地址', variant: 'destructive' });
+      return;
+    }
+    if (!model.trim()) {
+      addToast({ title: '请先填写模型名称', variant: 'destructive' });
+      return;
+    }
+
+    setTesting(true);
     try {
-      await aiService.chat(
-        '你好',
-        {
-          onDelta: () => {
-            gotResponse = true;
-          },
-          onError: (err) => {
-            addToast({
-              title: '连接失败',
-              description: err.message,
-              variant: 'destructive',
-            });
-          },
-          onDone: () => {
-            if (gotResponse) {
-              addToast({
-                title: '连接成功',
-                description: 'LLM 服务响应正常',
-              });
-            }
-          },
-        },
-        controller.signal,
-      );
+      const result = await aiService.testConnection({
+        api_url: url.trim(),
+        api_key: key || null,
+        model_name: model.trim(),
+      });
+      if (result.success) {
+        addToast({
+          title: '连接成功',
+          description: `模型已响应: "${result.reply}"`,
+        });
+      } else {
+        addToast({
+          title: '连接失败',
+          description: result.error || '未知错误',
+          variant: 'destructive',
+        });
+      }
     } catch {
       addToast({
-        title: '连接测试失败',
-        description: '请检查配置是否正确',
+        title: '测试请求失败',
+        description: '请检查网络或后端服务是否正常',
         variant: 'destructive',
       });
     } finally {
-      clearTimeout(timeout);
       setTesting(false);
     }
   }
@@ -255,8 +256,8 @@ export default function SettingsPage() {
           {user ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <Label className="text-muted-foreground">邮箱</Label>
-                <p className="text-sm font-medium mt-1">{user.email}</p>
+                <Label className="text-muted-foreground">用户名</Label>
+                <p className="text-sm font-medium mt-1">{user.username}</p>
               </div>
               <div>
                 <Label className="text-muted-foreground">昵称</Label>
@@ -445,6 +446,18 @@ export default function SettingsPage() {
                     取消
                   </Button>
                 )}
+                <Button
+                  variant="outline"
+                  onClick={handleTestConnection}
+                  disabled={testing || !llmForm.api_url.trim() || !llmForm.model_name.trim()}
+                >
+                  {testing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Zap className="h-4 w-4" />
+                  )}
+                  测试
+                </Button>
                 <Button
                   onClick={handleSaveLlmConfig}
                   disabled={llmSaving}

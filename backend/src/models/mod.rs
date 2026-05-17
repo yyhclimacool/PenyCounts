@@ -125,26 +125,12 @@ pub struct ChatMessage {
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
-    pub email: String,
-    pub password: String,
-    pub nickname: String,
+    pub username: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
-    pub email: String,
-    pub password: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ForgotPasswordRequest {
-    pub email: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ResetPasswordRequest {
-    pub token: String,
-    pub new_password: String,
+    pub username: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -261,7 +247,7 @@ pub struct AuthResponse {
 #[derive(Debug, Serialize)]
 pub struct UserResponse {
     pub id: Uuid,
-    pub email: String,
+    pub username: String,
     pub nickname: String,
 }
 
@@ -320,7 +306,7 @@ impl UserResponse {
     pub fn from_user(user: &User) -> Self {
         Self {
             id: user.id,
-            email: user.email.clone(),
+            username: user.email.clone(),
             nickname: user.nickname.clone(),
         }
     }

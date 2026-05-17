@@ -11,6 +11,15 @@ export async function saveConfig(payload: Partial<LlmConfig>): Promise<LlmConfig
   return data;
 }
 
+export async function testConnection(payload: {
+  api_url: string;
+  api_key?: string | null;
+  model_name: string;
+}): Promise<{ success: boolean; reply?: string; error?: string }> {
+  const { data } = await api.post('/ai/test-connection', payload);
+  return data;
+}
+
 export async function getChatHistory(): Promise<ChatMessage[]> {
   const { data } = await api.get<ChatMessage[]>('/ai/chat/history');
   return data;
@@ -27,6 +36,7 @@ function resolveChatRequestUrl(): string {
 
 export interface ChatStreamOptions {
   onDelta?: (chunk: string) => void;
+  onToolResult?: (data: { success: boolean; summary?: string; error?: string }) => void;
   onDone?: () => void;
   onError?: (error: Error) => void;
 }
@@ -39,7 +49,7 @@ export async function chat(
   options: ChatStreamOptions = {},
   signal?: AbortSignal,
 ): Promise<void> {
-  const { onDelta, onDone, onError } = options;
+  const { onDelta, onToolResult, onDone, onError } = options;
   const url = resolveChatRequestUrl();
   const token = localStorage.getItem(AUTH_TOKEN_KEY);
 
@@ -77,6 +87,7 @@ export async function chat(
 
   const decoder = new TextDecoder();
   let carry = '';
+  let currentEvent = 'message';
 
   try {
     while (true) {
@@ -87,9 +98,28 @@ export async function chat(
       carry = parts.pop() ?? '';
       for (const raw of parts) {
         const line = raw.replace(/\r$/, '').trim();
+
+        if (line.startsWith('event:')) {
+          currentEvent = line.slice(6).trim();
+          continue;
+        }
+
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
-        if (!payload || payload === '[DONE]') continue;
+        if (!payload || payload === '[DONE]') {
+          currentEvent = 'message';
+          continue;
+        }
+
+        if (currentEvent === 'tool_result') {
+          try {
+            const data = JSON.parse(payload);
+            onToolResult?.(data);
+          } catch { /* ignore parse errors */ }
+          currentEvent = 'message';
+          continue;
+        }
+
         let chunk = '';
         try {
           const obj = JSON.parse(payload) as {
@@ -108,6 +138,7 @@ export async function chat(
           chunk = payload;
         }
         if (chunk) onDelta?.(chunk);
+        currentEvent = 'message';
       }
     }
     if (carry.trim()) {

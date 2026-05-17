@@ -63,12 +63,6 @@ impl From<jsonwebtoken::errors::Error> for AppError {
     }
 }
 
-impl From<argon2::password_hash::Error> for AppError {
-    fn from(err: argon2::password_hash::Error) -> Self {
-        tracing::error!("Password hash error: {:?}", err);
-        AppError::Internal("Password processing error".to_string())
-    }
-}
 
 impl From<reqwest::Error> for AppError {
     fn from(err: reqwest::Error) -> Self {

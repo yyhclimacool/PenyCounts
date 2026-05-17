@@ -131,3 +131,28 @@ pub async fn clear_history(
     tracing::info!(user_id = %auth.user_id, "clear_history: history cleared");
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[derive(serde::Deserialize)]
+pub struct TestConnectionRequest {
+    pub api_url: String,
+    pub api_key: Option<String>,
+    pub model_name: String,
+}
+
+pub async fn test_connection(
+    _auth: AuthUser,
+    Json(req): Json<TestConnectionRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::debug!(api_url = %req.api_url, model = %req.model_name, "test_connection: received request");
+    let result = services::ai::test_llm_connection(&req.api_url, req.api_key.as_deref(), &req.model_name).await;
+    match result {
+        Ok(reply) => {
+            tracing::info!(model = %req.model_name, "test_connection: success");
+            Ok(Json(serde_json::json!({ "success": true, "reply": reply })))
+        }
+        Err(err) => {
+            tracing::warn!(model = %req.model_name, error = %err, "test_connection: failed");
+            Ok(Json(serde_json::json!({ "success": false, "error": err })))
+        }
+    }
+}

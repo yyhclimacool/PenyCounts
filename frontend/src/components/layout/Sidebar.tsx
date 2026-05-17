@@ -298,7 +298,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                 {user?.nickname ?? '用户'}
               </p>
               <p className="truncate text-xs text-sidebar-foreground/40">
-                {user?.email ?? ''}
+                {user?.username ?? ''}
               </p>
             </div>
             <ChevronRight className="h-4 w-4 shrink-0 text-sidebar-foreground/25 group-hover:text-sidebar-foreground/50 transition-colors" />
@@ -325,8 +325,8 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                     <p className="text-sm font-medium mt-0.5">{user.nickname}</p>
                   </div>
                   <div>
-                    <Label className="text-muted-foreground text-xs">邮箱</Label>
-                    <p className="text-sm font-medium mt-0.5">{user.email}</p>
+                    <Label className="text-muted-foreground text-xs">用户名</Label>
+                    <p className="text-sm font-medium mt-0.5">{user.username}</p>
                   </div>
                 </div>
               )}
