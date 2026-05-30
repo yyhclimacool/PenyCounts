@@ -2,6 +2,32 @@ export interface User {
   id: string;
   username: string;
   nickname: string;
+  avatar_url?: string | null;
+  default_family_id?: string | null;
+}
+
+export interface Family {
+  id: string;
+  name: string;
+  invite_code: string;
+  role: string;
+  member_count: number;
+  created_at: string;
+}
+
+export interface FamilyDetail {
+  id: string;
+  name: string;
+  invite_code: string;
+  members: FamilyMemberInfo[];
+}
+
+export interface FamilyMemberInfo {
+  user_id: string;
+  nickname: string;
+  avatar_url: string | null;
+  role: string;
+  joined_at: string;
 }
 
 export interface AuthResponse {

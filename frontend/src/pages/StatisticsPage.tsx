@@ -1,5 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import dayjs from 'dayjs';
+import ReactECharts from 'echarts-for-react';
+import * as echarts from 'echarts';
 import {
   ChevronLeft,
   ChevronRight,
@@ -10,24 +12,6 @@ import {
   BarChart3,
   CalendarDays,
 } from 'lucide-react';
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  Sector,
-  BarChart,
-  Bar,
-  AreaChart,
-  Area,
-} from 'recharts';
 import {
   Card,
   CardContent,
@@ -60,6 +44,7 @@ import type {
 import { formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
 
+
 const INCOME_COLOR = '#10B981';
 const EXPENSE_COLOR = '#EF4444';
 
@@ -80,6 +65,24 @@ function formatYAxis(value: number): string {
 function daysInMonth(year: number, month: number): number {
   return new Date(year, month, 0).getDate();
 }
+
+function tooltipFormatter(params: any): string {
+  const items = Array.isArray(params) ? params : [params];
+  let html = '';
+  if (items[0]?.axisValue != null) {
+    html += `<div style="font-weight:500;margin-bottom:4px">${items[0].axisValue}</div>`;
+  }
+  items.forEach((item: any) => {
+    html += `<div style="display:flex;align-items:center;gap:6px;line-height:1.8"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${item.color}"></span><span style="color:#6b7280">${item.seriesName}:</span><span style="font-weight:500">${formatCurrency(item.value, 'CNY')}</span></div>`;
+  });
+  return html;
+}
+
+const TOOLTIP_STYLE = {
+  backgroundColor: 'rgba(255,255,255,0.96)',
+  borderColor: '#e5e7eb',
+  textStyle: { color: '#1f2937', fontSize: 12 },
+};
 
 /* ------------------------------------------------------------------ */
 /*  Shared                                                             */
@@ -161,35 +164,6 @@ function EmptyState({ message = '暂无数据' }: { message?: string }) {
   );
 }
 
-function ChartTooltip({ active, payload, label }: any) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="rounded-lg border bg-card px-3 py-2.5 shadow-md">
-      {label != null && (
-        <p className="text-sm font-medium text-card-foreground mb-1.5">
-          {label}
-        </p>
-      )}
-      {payload.map((item: any, i: number) => (
-        <div key={i} className="flex items-center gap-2 text-sm leading-relaxed">
-          <span
-            className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
-            style={{ backgroundColor: item.color || item.fill }}
-          />
-          <span className="text-muted-foreground">{item.name}:</span>
-          <span className="font-medium text-card-foreground">
-            {formatCurrency(item.value, 'CNY')}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/* ================================================================== */
-/*  Tab 1 — Overview / Summary Analysis                                */
-/* ================================================================== */
-
 function TypeToggle({
   value,
   onChange,
@@ -226,6 +200,10 @@ function TypeToggle({
     </div>
   );
 }
+
+/* ================================================================== */
+/*  Tab 1 — Overview / Summary Analysis                                */
+/* ================================================================== */
 
 function OverviewTab() {
   const currentYear = dayjs().year();
@@ -324,15 +302,171 @@ function OverviewTab() {
     expense: showExpense ? (parseFloat(d.expense) || 0) : 0,
   }));
 
+  const monthlyBarOption = useMemo((): echarts.EChartsCoreOption => {
+    const series: any[] = [];
+    if (showIncome) {
+      series.push({
+        name: '收入',
+        type: 'bar',
+        data: monthlyChartData.map((d) => d.income),
+        itemStyle: { color: INCOME_COLOR, borderRadius: [4, 4, 0, 0] },
+        barGap: '20%',
+      });
+    }
+    if (showExpense) {
+      series.push({
+        name: '支出',
+        type: 'bar',
+        data: monthlyChartData.map((d) => d.expense),
+        itemStyle: { color: EXPENSE_COLOR, borderRadius: [4, 4, 0, 0] },
+        barGap: '20%',
+      });
+    }
+    return {
+      tooltip: { trigger: 'axis', ...TOOLTIP_STYLE, formatter: tooltipFormatter },
+      legend: { bottom: 0, textStyle: { fontSize: 12 } },
+      grid: { left: 60, right: 16, top: 16, bottom: 36 },
+      xAxis: {
+        type: 'category',
+        data: MONTHS.map((m) => `${m}月`),
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 12 },
+      },
+      yAxis: {
+        type: 'value',
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 12, formatter: formatYAxis },
+        splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
+      },
+      series,
+    };
+  }, [monthlyChartData, showIncome, showExpense]);
+
+  const dailyAreaOption = useMemo((): echarts.EChartsCoreOption => {
+    const series: any[] = [];
+    if (showExpense) {
+      series.push({
+        name: '支出',
+        type: 'line',
+        data: dailyChartData.map((d) => d.expense),
+        smooth: false,
+        symbol: 'none',
+        lineStyle: { color: EXPENSE_COLOR, width: 2 },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(239,68,68,0.2)' },
+            { offset: 1, color: 'rgba(239,68,68,0)' },
+          ]),
+        },
+        itemStyle: { color: EXPENSE_COLOR },
+      });
+    }
+    if (showIncome) {
+      series.push({
+        name: '收入',
+        type: 'line',
+        data: dailyChartData.map((d) => d.income),
+        smooth: false,
+        symbol: 'none',
+        lineStyle: { color: INCOME_COLOR, width: 2 },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(16,185,129,0.2)' },
+            { offset: 1, color: 'rgba(16,185,129,0)' },
+          ]),
+        },
+        itemStyle: { color: INCOME_COLOR },
+      });
+    }
+    return {
+      tooltip: {
+        trigger: 'axis',
+        ...TOOLTIP_STYLE,
+        formatter: (params: any) => {
+          const items = Array.isArray(params) ? params : [params];
+          let html = `<div style="font-weight:500;margin-bottom:4px">${selectedMonth}月${items[0]?.axisValue}</div>`;
+          items.forEach((item: any) => {
+            html += `<div style="display:flex;align-items:center;gap:6px;line-height:1.8"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${item.color}"></span><span style="color:#6b7280">${item.seriesName}:</span><span style="font-weight:500">${formatCurrency(item.value, 'CNY')}</span></div>`;
+          });
+          return html;
+        },
+      },
+      legend: { bottom: 0, textStyle: { fontSize: 12 } },
+      grid: { left: 55, right: 16, top: 16, bottom: 36 },
+      xAxis: {
+        type: 'category',
+        data: dailyChartData.map((d) => `${d.day}日`),
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 11, interval: Math.floor(dailyChartData.length / 10) },
+      },
+      yAxis: {
+        type: 'value',
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 11, formatter: formatYAxis },
+        splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
+      },
+      series,
+    };
+  }, [dailyChartData, selectedMonth, showIncome, showExpense]);
+
+  const yearlyLineOption = useMemo((): echarts.EChartsCoreOption => {
+    const series: any[] = [];
+    if (showIncome) {
+      series.push({
+        name: '收入',
+        type: 'line',
+        data: yearlyChartData.map((d) => d.income),
+        smooth: false,
+        symbolSize: 8,
+        lineStyle: { color: INCOME_COLOR, width: 2.5 },
+        itemStyle: { color: INCOME_COLOR },
+      });
+    }
+    if (showExpense) {
+      series.push({
+        name: '支出',
+        type: 'line',
+        data: yearlyChartData.map((d) => d.expense),
+        smooth: false,
+        symbolSize: 8,
+        lineStyle: { color: EXPENSE_COLOR, width: 2.5 },
+        itemStyle: { color: EXPENSE_COLOR },
+      });
+    }
+    return {
+      tooltip: { trigger: 'axis', ...TOOLTIP_STYLE, formatter: tooltipFormatter },
+      legend: { bottom: 0, textStyle: { fontSize: 12 } },
+      grid: { left: 60, right: 16, top: 16, bottom: 36 },
+      xAxis: {
+        type: 'category',
+        data: yearlyChartData.map((d) => `${d.year}`),
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 12 },
+      },
+      yAxis: {
+        type: 'value',
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 12, formatter: formatYAxis },
+        splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
+      },
+      series,
+    };
+  }, [yearlyChartData, showIncome, showExpense]);
+
   return (
     <div className="space-y-6">
-      {/* Type toggle for all sections */}
       <div className="flex flex-wrap items-center gap-3 justify-between">
         <YearSelector year={year} onChange={setYear} />
         <TypeToggle value={viewType} onChange={setViewType} />
       </div>
 
-      {/* ── Section 1: Monthly Trend ── */}
+      {/* Monthly Trend */}
       <div className="space-y-4">
         <h2 className="text-base font-semibold flex items-center gap-2">
           <CalendarDays className="h-4 w-4 text-primary" />
@@ -347,29 +481,11 @@ function OverviewTab() {
           <>
             <Card>
               <CardContent className="pt-6">
-                <ResponsiveContainer width="100%" height={320}>
-                  <BarChart data={monthlyChartData} barGap={4}>
-                    <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
-                    <XAxis
-                      dataKey="month"
-                      tickFormatter={(v) => `${v}月`}
-                      fontSize={12}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <YAxis
-                      tickFormatter={formatYAxis}
-                      fontSize={12}
-                      tickLine={false}
-                      axisLine={false}
-                      width={55}
-                    />
-                    <Tooltip content={<ChartTooltip />} labelFormatter={(v) => `${v}月`} />
-                    <Legend formatter={(value: string) => <span className="text-sm">{value}</span>} />
-                    {showIncome && <Bar dataKey="income" name="收入" fill={INCOME_COLOR} radius={[4, 4, 0, 0]} />}
-                    {showExpense && <Bar dataKey="expense" name="支出" fill={EXPENSE_COLOR} radius={[4, 4, 0, 0]} />}
-                  </BarChart>
-                </ResponsiveContainer>
+                <ReactECharts
+                  option={monthlyBarOption}
+                  style={{ height: 320 }}
+                  notMerge
+                />
               </CardContent>
             </Card>
 
@@ -421,7 +537,7 @@ function OverviewTab() {
         )}
       </div>
 
-      {/* ── Section 2: Daily Trend ── */}
+      {/* Daily Trend */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold flex items-center gap-2">
@@ -439,61 +555,11 @@ function OverviewTab() {
           <>
             <Card>
               <CardContent className="pt-6">
-                <ResponsiveContainer width="100%" height={280}>
-                  <AreaChart data={dailyChartData}>
-                    <defs>
-                      <linearGradient id="gradIncome" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={INCOME_COLOR} stopOpacity={0.2} />
-                        <stop offset="95%" stopColor={INCOME_COLOR} stopOpacity={0} />
-                      </linearGradient>
-                      <linearGradient id="gradExpense" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={EXPENSE_COLOR} stopOpacity={0.2} />
-                        <stop offset="95%" stopColor={EXPENSE_COLOR} stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
-                    <XAxis
-                      dataKey="day"
-                      tickFormatter={(v) => `${v}日`}
-                      fontSize={11}
-                      tickLine={false}
-                      axisLine={false}
-                      interval={Math.floor(dailyChartData.length / 10)}
-                    />
-                    <YAxis
-                      tickFormatter={formatYAxis}
-                      fontSize={11}
-                      tickLine={false}
-                      axisLine={false}
-                      width={50}
-                    />
-                    <Tooltip
-                      content={<ChartTooltip />}
-                      labelFormatter={(v) => `${selectedMonth}月${v}日`}
-                    />
-                    <Legend formatter={(value: string) => <span className="text-sm">{value}</span>} />
-                    {showIncome && (
-                      <Area
-                        type="monotone"
-                        dataKey="income"
-                        name="收入"
-                        stroke={INCOME_COLOR}
-                        strokeWidth={2}
-                        fill="url(#gradIncome)"
-                      />
-                    )}
-                    {showExpense && (
-                      <Area
-                        type="monotone"
-                        dataKey="expense"
-                        name="支出"
-                        stroke={EXPENSE_COLOR}
-                        strokeWidth={2}
-                        fill="url(#gradExpense)"
-                      />
-                    )}
-                  </AreaChart>
-                </ResponsiveContainer>
+                <ReactECharts
+                  option={dailyAreaOption}
+                  style={{ height: 280 }}
+                  notMerge
+                />
               </CardContent>
             </Card>
 
@@ -519,7 +585,7 @@ function OverviewTab() {
         )}
       </div>
 
-      {/* ── Section 3: Yearly Trend ── */}
+      {/* Yearly Trend */}
       <div className="space-y-4">
         <h2 className="text-base font-semibold flex items-center gap-2">
           <CalendarDays className="h-4 w-4 text-primary" />
@@ -533,52 +599,11 @@ function OverviewTab() {
         ) : (
           <Card>
             <CardContent className="pt-6">
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={yearlyChartData}>
-                  <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
-                  <XAxis
-                    dataKey="year"
-                    tickFormatter={(v) => `${v}`}
-                    fontSize={12}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <YAxis
-                    tickFormatter={formatYAxis}
-                    fontSize={12}
-                    tickLine={false}
-                    axisLine={false}
-                    width={55}
-                  />
-                  <Tooltip
-                    content={<ChartTooltip />}
-                    labelFormatter={(v) => `${v}年`}
-                  />
-                  <Legend formatter={(value: string) => <span className="text-sm">{value}</span>} />
-                  {showIncome && (
-                    <Line
-                      type="monotone"
-                      dataKey="income"
-                      name="收入"
-                      stroke={INCOME_COLOR}
-                      strokeWidth={2.5}
-                      dot={{ r: 5, fill: INCOME_COLOR, strokeWidth: 0 }}
-                      activeDot={{ r: 7, strokeWidth: 0 }}
-                    />
-                  )}
-                  {showExpense && (
-                    <Line
-                      type="monotone"
-                      dataKey="expense"
-                      name="支出"
-                      stroke={EXPENSE_COLOR}
-                      strokeWidth={2.5}
-                      dot={{ r: 5, fill: EXPENSE_COLOR, strokeWidth: 0 }}
-                      activeDot={{ r: 7, strokeWidth: 0 }}
-                    />
-                  )}
-                </LineChart>
-              </ResponsiveContainer>
+              <ReactECharts
+                option={yearlyLineOption}
+                style={{ height: 300 }}
+                notMerge
+              />
             </CardContent>
           </Card>
         )}
@@ -597,7 +622,6 @@ function CategoryBreakdownTab() {
   const [type, setType] = useState<'expense' | 'income'>('expense');
   const [data, setData] = useState<CategoryBreakdown[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeIndex, setActiveIndex] = useState(-1);
 
   useEffect(() => {
     let cancelled = false;
@@ -611,16 +635,12 @@ function CategoryBreakdownTab() {
       .then((d) => !cancelled && setData(d))
       .catch(() => !cancelled && setData([]))
       .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [year, month, type]);
 
   const sorted = [...data].sort(
     (a, b) => parseFloat(b.total) - parseFloat(a.total),
   );
-  const total = sorted.reduce((s, d) => s + (parseFloat(d.total) || 0), 0);
-
   const pieData = sorted.map((d) => ({
     name: d.category_name,
     value: parseFloat(d.total) || 0,
@@ -633,6 +653,92 @@ function CategoryBreakdownTab() {
     value: parseFloat(d.total) || 0,
     percentage: d.percentage,
   }));
+
+  const pieOption = useMemo((): echarts.EChartsCoreOption => ({
+    tooltip: {
+      trigger: 'item',
+      ...TOOLTIP_STYLE,
+    },
+    legend: {
+      orient: 'vertical',
+      left: '55%',
+      top: 'center',
+      icon: 'circle',
+      itemWidth: 10,
+      itemHeight: 10,
+      textStyle: { fontSize: 12 },
+      formatter: (name: string) => {
+        const item = pieData.find((d) => d.name === name);
+        if (!item) return name;
+        return `${name}  ${item.percentage.toFixed(1)}%`;
+      },
+    },
+    series: [
+      {
+        type: 'pie',
+        radius: ['40%', '70%'],
+        center: ['28%', '50%'],
+        avoidLabelOverlap: false,
+        data: pieData.map((d, i) => ({
+          name: d.name,
+          value: d.value,
+          itemStyle: { color: CATEGORY_PALETTE[i % CATEGORY_PALETTE.length] },
+        })),
+        label: { show: false },
+        emphasis: {
+          label: { show: true, fontSize: 14, fontWeight: 'bold' },
+          itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.2)' },
+        },
+        labelLine: { show: false },
+        itemStyle: { borderRadius: 10, borderColor: '#fff', borderWidth: 2 },
+      },
+    ],
+  }), [pieData]);
+
+  const barOption = useMemo((): echarts.EChartsCoreOption => ({
+    tooltip: {
+      trigger: 'axis',
+      ...TOOLTIP_STYLE,
+      formatter: tooltipFormatter,
+    },
+    grid: { left: 110, right: 80, top: 8, bottom: 8 },
+    xAxis: {
+      type: 'value',
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { fontSize: 11, formatter: formatYAxis },
+      splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
+    },
+    yAxis: {
+      type: 'category',
+      data: barData.map((d) => d.name).reverse(),
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { fontSize: 12 },
+    },
+    series: [
+      {
+        name: '金额',
+        type: 'bar',
+        data: barData.map((d, i) => ({
+          value: d.value,
+          itemStyle: { color: CATEGORY_PALETTE[i % CATEGORY_PALETTE.length] },
+        })).reverse(),
+        barWidth: 22,
+        itemStyle: { borderRadius: [0, 4, 4, 0] },
+        label: {
+          show: true,
+          position: 'right',
+          fontSize: 11,
+          color: '#64748b',
+          formatter: (params: any) => {
+            const idx = barData.length - 1 - params.dataIndex;
+            return `${barData[idx]?.percentage.toFixed(1)}%`;
+          },
+        },
+      },
+    ],
+  }), [barData]);
 
   return (
     <div className="space-y-4">
@@ -673,102 +779,11 @@ function CategoryBreakdownTab() {
         <>
           <Card>
             <CardContent className="pt-6">
-              <div className="relative">
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart
-                    onMouseLeave={() => setActiveIndex(-1)}
-                  >
-                    <Pie
-                      data={pieData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={72}
-                      outerRadius={120}
-                      dataKey="value"
-                      nameKey="name"
-                      paddingAngle={2}
-                      strokeWidth={0}
-                      shape={(props: any) => {
-                        const isActive = props.index === activeIndex;
-                        const dimmed = activeIndex >= 0 && !isActive;
-                        return (
-                          <Sector
-                            {...props}
-                            innerRadius={isActive ? props.innerRadius - 3 : props.innerRadius}
-                            outerRadius={isActive ? props.outerRadius + 8 : props.outerRadius}
-                            opacity={dimmed ? 0.4 : 1}
-                            style={{
-                              transition: 'all 0.25s cubic-bezier(0.4,0,0.2,1)',
-                              filter: isActive ? 'drop-shadow(0 4px 12px rgba(0,0,0,0.18))' : 'none',
-                              cursor: 'pointer',
-                            }}
-                            onMouseEnter={() => setActiveIndex(props.index)}
-                          />
-                        );
-                      }}
-                    >
-                      {pieData.map((_, i) => (
-                        <Cell
-                          key={i}
-                          fill={CATEGORY_PALETTE[i % CATEGORY_PALETTE.length]}
-                        />
-                      ))}
-                    </Pie>
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div
-                    key={activeIndex >= 0 ? activeIndex : 'default'}
-                    className={cn(
-                      'text-center',
-                      activeIndex >= 0
-                        ? 'animate-in fade-in-0 zoom-in-90 duration-300'
-                        : 'animate-in fade-in-0 duration-200',
-                    )}
-                  >
-                    {activeIndex >= 0 && pieData[activeIndex] ? (
-                      <>
-                        <p className="text-sm font-semibold">
-                          {pieData[activeIndex].icon} {pieData[activeIndex].name}
-                        </p>
-                        <p className="text-lg font-bold mt-0.5">
-                          {formatCurrency(pieData[activeIndex].value, 'CNY')}
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          占比 {pieData[activeIndex].percentage.toFixed(1)}%
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <p className="text-xs text-muted-foreground">
-                          {type === 'expense' ? '总支出' : '总收入'}
-                        </p>
-                        <p className="text-lg font-bold">
-                          {formatCurrency(total, 'CNY')}
-                        </p>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 mt-2">
-                {sorted.map((cat, i) => (
-                  <div
-                    key={cat.category_name}
-                    className="flex items-center gap-1.5 text-xs text-muted-foreground"
-                  >
-                    <span
-                      className="w-3 h-3 rounded-full shrink-0"
-                      style={{
-                        backgroundColor: CATEGORY_PALETTE[i % CATEGORY_PALETTE.length],
-                      }}
-                    />
-                    <span>
-                      {cat.icon} {cat.category_name}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              <ReactECharts
+                option={pieOption}
+                style={{ height: 300 }}
+                notMerge
+              />
             </CardContent>
           </Card>
 
@@ -777,65 +792,11 @@ function CategoryBreakdownTab() {
               <CardTitle className="text-base">分类排名</CardTitle>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer
-                width="100%"
-                height={Math.max(180, barData.length * 44)}
-              >
-                <BarChart
-                  data={barData}
-                  layout="vertical"
-                  margin={{ left: 10, right: 90 }}
-                >
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    horizontal={false}
-                    strokeOpacity={0.15}
-                  />
-                  <XAxis
-                    type="number"
-                    tickFormatter={formatYAxis}
-                    fontSize={11}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <YAxis
-                    type="category"
-                    dataKey="name"
-                    width={100}
-                    fontSize={12}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Bar
-                    dataKey="value"
-                    name="金额"
-                    radius={[0, 4, 4, 0]}
-                    barSize={22}
-                    label={({ x, y, width, height, index }: any) => {
-                      const d = barData[index];
-                      if (!d) return null;
-                      return (
-                        <text
-                          x={Number(x) + Number(width) + 6}
-                          y={Number(y) + Number(height) / 2 + 4}
-                          fontSize={11}
-                          fill="#64748b"
-                        >
-                          {d.percentage.toFixed(1)}%
-                        </text>
-                      );
-                    }}
-                  >
-                    {barData.map((_, i) => (
-                      <Cell
-                        key={i}
-                        fill={CATEGORY_PALETTE[i % CATEGORY_PALETTE.length]}
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              <ReactECharts
+                option={barOption}
+                style={{ height: Math.max(180, barData.length * 44) }}
+                notMerge
+              />
             </CardContent>
           </Card>
         </>
@@ -867,9 +828,7 @@ function MemberAnalysisTab() {
       .then((d) => !cancelled && setData(d))
       .catch(() => !cancelled && setData([]))
       .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [year, month, viewType]);
 
   const sorted = [...data].sort(
@@ -890,7 +849,63 @@ function MemberAnalysisTab() {
   });
 
   const barColor = viewType === 'income' ? INCOME_COLOR : viewType === 'expense' ? EXPENSE_COLOR : '#0062FF';
-  const barLabel = viewType === 'income' ? '收入' : viewType === 'expense' ? '支出' : '金额';
+
+  const barOption = useMemo((): echarts.EChartsCoreOption => {
+    const hex = barColor.replace('#', '');
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+
+    return {
+      tooltip: {
+        trigger: 'axis',
+        ...TOOLTIP_STYLE,
+        formatter: tooltipFormatter,
+      },
+      grid: { left: 80, right: 140, top: 8, bottom: 8 },
+      xAxis: {
+        type: 'value',
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 11, formatter: formatYAxis },
+        splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
+      },
+      yAxis: {
+        type: 'category',
+        data: barData.map((d) => d.name).reverse(),
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 13 },
+      },
+      series: [
+        {
+          name: viewType === 'income' ? '收入' : viewType === 'expense' ? '支出' : '金额',
+          type: 'bar',
+          data: barData.map((d, i) => {
+            const opacity = 1 - (i / Math.max(barData.length - 1, 1)) * 0.6;
+            return {
+              value: d.total,
+              itemStyle: { color: `rgba(${r}, ${g}, ${b}, ${opacity})` },
+            };
+          }).reverse(),
+          barWidth: 28,
+          itemStyle: { borderRadius: [0, 4, 4, 0] },
+          label: {
+            show: true,
+            position: 'right',
+            fontSize: 11,
+            color: '#64748b',
+            formatter: (params: any) => {
+              const idx = barData.length - 1 - params.dataIndex;
+              const d = barData[idx];
+              if (!d) return '';
+              return `${formatCurrency(d.total, 'CNY')} (${d.percentage.toFixed(1)}%)`;
+            },
+          },
+        },
+      ],
+    };
+  }, [barData, barColor, viewType]);
 
   return (
     <div className="space-y-4">
@@ -909,70 +924,11 @@ function MemberAnalysisTab() {
       ) : (
         <Card>
           <CardContent className="pt-6">
-            <ResponsiveContainer
-              width="100%"
-              height={Math.max(180, barData.length * 52)}
-            >
-              <BarChart
-                data={barData}
-                layout="vertical"
-                margin={{ left: 10, right: 130 }}
-              >
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  horizontal={false}
-                  strokeOpacity={0.15}
-                />
-                <XAxis
-                  type="number"
-                  tickFormatter={formatYAxis}
-                  fontSize={11}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <YAxis
-                  type="category"
-                  dataKey="name"
-                  width={70}
-                  fontSize={13}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <Tooltip content={<ChartTooltip />} />
-                <Bar
-                  dataKey="total"
-                  name={barLabel}
-                  radius={[0, 4, 4, 0]}
-                  barSize={28}
-                  label={({ x, y, width, height, value, index }: any) => {
-                    const d = barData[index];
-                    if (!d) return null;
-                    return (
-                      <text
-                        x={Number(x) + Number(width) + 8}
-                        y={Number(y) + Number(height) / 2 + 4}
-                        fontSize={11}
-                        fill="#64748b"
-                      >
-                        {formatCurrency(value, 'CNY')} (
-                        {d.percentage.toFixed(1)}%)
-                      </text>
-                    );
-                  }}
-                >
-                  {barData.map((_, i) => {
-                    const hex = barColor.replace('#', '');
-                    const r = parseInt(hex.slice(0, 2), 16);
-                    const g = parseInt(hex.slice(2, 4), 16);
-                    const b = parseInt(hex.slice(4, 6), 16);
-                    const opacity = 1 - (i / Math.max(barData.length - 1, 1)) * 0.6;
-                    return (
-                      <Cell key={i} fill={`rgba(${r}, ${g}, ${b}, ${opacity})`} />
-                    );
-                  })}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            <ReactECharts
+              option={barOption}
+              style={{ height: Math.max(180, barData.length * 52) }}
+              notMerge
+            />
           </CardContent>
         </Card>
       )}
@@ -998,9 +954,7 @@ function SocialGiftsTab() {
       .then((d) => !cancelled && setData(d))
       .catch(() => !cancelled && setData([]))
       .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [year]);
 
   const showGiven = viewType === 'all' || viewType === 'expense';
@@ -1021,6 +975,50 @@ function SocialGiftsTab() {
     given: showGiven ? (parseFloat(d.given) || 0) : 0,
     received: showReceived ? (parseFloat(d.received) || 0) : 0,
   }));
+
+  const socialBarOption = useMemo((): echarts.EChartsCoreOption => {
+    const series: any[] = [];
+    if (showGiven) {
+      series.push({
+        name: '送出',
+        type: 'bar',
+        data: chartData.map((d) => d.given),
+        itemStyle: { color: EXPENSE_COLOR, borderRadius: [4, 4, 0, 0] },
+      });
+    }
+    if (showReceived) {
+      series.push({
+        name: '收到',
+        type: 'bar',
+        data: chartData.map((d) => d.received),
+        itemStyle: { color: INCOME_COLOR, borderRadius: [4, 4, 0, 0] },
+      });
+    }
+    return {
+      tooltip: { trigger: 'axis', ...TOOLTIP_STYLE, formatter: tooltipFormatter },
+      legend: { bottom: 0, textStyle: { fontSize: 12 } },
+      grid: { left: 60, right: 16, top: 16, bottom: 36 },
+      xAxis: {
+        type: 'category',
+        data: chartData.map((d) => d.name),
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: {
+          fontSize: 12,
+          interval: 0,
+          rotate: chartData.length > 6 ? 35 : 0,
+        },
+      },
+      yAxis: {
+        type: 'value',
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 11, formatter: formatYAxis },
+        splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
+      },
+      series,
+    };
+  }, [chartData, showGiven, showReceived]);
 
   return (
     <div className="space-y-4">
@@ -1070,53 +1068,11 @@ function SocialGiftsTab() {
 
           <Card>
             <CardContent className="pt-6">
-              <ResponsiveContainer width="100%" height={350}>
-                <BarChart data={chartData}>
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    strokeOpacity={0.15}
-                  />
-                  <XAxis
-                    dataKey="name"
-                    fontSize={12}
-                    tickLine={false}
-                    axisLine={false}
-                    interval={0}
-                    angle={chartData.length > 6 ? -35 : 0}
-                    textAnchor={chartData.length > 6 ? 'end' : 'middle'}
-                    height={chartData.length > 6 ? 70 : 30}
-                  />
-                  <YAxis
-                    tickFormatter={formatYAxis}
-                    fontSize={11}
-                    tickLine={false}
-                    axisLine={false}
-                    width={55}
-                  />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Legend
-                    formatter={(value: string) => (
-                      <span className="text-sm">{value}</span>
-                    )}
-                  />
-                  {showGiven && (
-                    <Bar
-                      dataKey="given"
-                      name="送出"
-                      fill={EXPENSE_COLOR}
-                      radius={[4, 4, 0, 0]}
-                    />
-                  )}
-                  {showReceived && (
-                    <Bar
-                      dataKey="received"
-                      name="收到"
-                      fill={INCOME_COLOR}
-                      radius={[4, 4, 0, 0]}
-                    />
-                  )}
-                </BarChart>
-              </ResponsiveContainer>
+              <ReactECharts
+                option={socialBarOption}
+                style={{ height: 350 }}
+                notMerge
+              />
             </CardContent>
           </Card>
 

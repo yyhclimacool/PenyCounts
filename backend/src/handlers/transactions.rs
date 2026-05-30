@@ -1,6 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{StatusCode, header},
+    response::IntoResponse,
     Json,
 };
 use uuid::Uuid;
@@ -9,8 +10,8 @@ use crate::config::AppState;
 use crate::errors::AppError;
 use crate::middleware::AuthUser;
 use crate::models::{
-    CreateTransactionRequest, PaginatedResponse, Transaction, TransactionFilter,
-    TransactionMember, TransactionWithMembers,
+    CreateTransactionRequest, ImportCsvRequest, ImportResult, PaginatedResponse, Transaction,
+    TransactionFilter, TransactionMember, TransactionWithMembers,
 };
 use crate::services;
 
@@ -19,9 +20,9 @@ pub async fn list_transactions(
     auth: AuthUser,
     Query(filter): Query<TransactionFilter>,
 ) -> Result<Json<PaginatedResponse<TransactionWithMembers>>, AppError> {
-    tracing::debug!(user_id = %auth.user_id, ?filter, "list_transactions: received request");
+    tracing::debug!(user_id = %auth.family_id, ?filter, "list_transactions: received request");
     let result =
-        services::transaction::list_transactions(&state.pool, auth.user_id, filter).await?;
+        services::transaction::list_transactions(&state.pool, auth.family_id, filter).await?;
 
     let txn_ids: Vec<Uuid> = result.data.iter().map(|t| t.id).collect();
     tracing::debug!(count = txn_ids.len(), "list_transactions: fetched transactions, loading members");
@@ -75,8 +76,8 @@ pub async fn get_transaction(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Transaction>, AppError> {
-    tracing::debug!(user_id = %auth.user_id, txn_id = %id, "get_transaction: received request");
-    let txn = services::transaction::get_transaction(&state.pool, auth.user_id, id).await?;
+    tracing::debug!(user_id = %auth.family_id, txn_id = %id, "get_transaction: received request");
+    let txn = services::transaction::get_transaction(&state.pool, auth.family_id, id).await?;
     tracing::debug!(txn_id = %txn.id, r#type = %txn.r#type, amount = %txn.amount, "get_transaction: returning transaction");
     Ok(Json(txn))
 }
@@ -87,7 +88,7 @@ pub async fn create_transaction(
     Json(req): Json<CreateTransactionRequest>,
 ) -> Result<(StatusCode, Json<Transaction>), AppError> {
     tracing::debug!(
-        user_id = %auth.user_id,
+        user_id = %auth.family_id,
         r#type = %req.r#type,
         amount = %req.amount,
         currency = %req.currency,
@@ -101,7 +102,7 @@ pub async fn create_transaction(
         "create_transaction: received request"
     );
     let txn =
-        services::transaction::create_transaction(&state.pool, auth.user_id, req).await?;
+        services::transaction::create_transaction(&state.pool, auth.user_id, auth.family_id, req).await?;
     tracing::info!(txn_id = %txn.id, amount = %txn.amount, "create_transaction: created successfully");
     Ok((StatusCode::CREATED, Json(txn)))
 }
@@ -113,7 +114,7 @@ pub async fn update_transaction(
     Json(req): Json<CreateTransactionRequest>,
 ) -> Result<Json<Transaction>, AppError> {
     tracing::debug!(
-        user_id = %auth.user_id,
+        user_id = %auth.family_id,
         txn_id = %id,
         r#type = %req.r#type,
         amount = %req.amount,
@@ -128,7 +129,7 @@ pub async fn update_transaction(
         "update_transaction: received request"
     );
     let txn =
-        services::transaction::update_transaction(&state.pool, auth.user_id, id, req).await?;
+        services::transaction::update_transaction(&state.pool, auth.family_id, id, req).await?;
     tracing::info!(txn_id = %txn.id, amount = %txn.amount, "update_transaction: updated successfully");
     Ok(Json(txn))
 }
@@ -138,10 +139,52 @@ pub async fn delete_transaction(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    tracing::debug!(user_id = %auth.user_id, txn_id = %id, "delete_transaction: received request");
-    services::transaction::delete_transaction(&state.pool, auth.user_id, id).await?;
+    tracing::debug!(user_id = %auth.family_id, txn_id = %id, "delete_transaction: received request");
+    services::transaction::delete_transaction(&state.pool, auth.family_id, id).await?;
     tracing::info!(txn_id = %id, "delete_transaction: deleted successfully");
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn clear_all_transactions(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::warn!(family_id = %auth.family_id, "clear_all_transactions: received request");
+    let deleted = services::transaction::clear_all_transactions(&state.pool, auth.family_id).await?;
+    tracing::warn!(family_id = %auth.family_id, deleted, "clear_all_transactions: done");
+    Ok(Json(serde_json::json!({ "deleted": deleted })))
+}
+
+pub async fn export_csv(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(filter): Query<TransactionFilter>,
+) -> Result<impl IntoResponse, AppError> {
+    let csv = services::transaction::export_csv(&state.pool, auth.family_id, filter).await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+            (header::CONTENT_DISPOSITION, "attachment; filename=\"transactions.csv\""),
+        ],
+        csv,
+    ))
+}
+
+pub async fn import_csv(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<ImportCsvRequest>,
+) -> Result<Json<ImportResult>, AppError> {
+    tracing::info!(user_id = %auth.family_id, content_len = req.content.len(), "import_csv: received request");
+    let result =
+        services::transaction::import_csv(&state.pool, auth.user_id, auth.family_id, &req.content).await?;
+    tracing::info!(
+        total = result.total,
+        imported = result.imported,
+        skipped = result.skipped,
+        "import_csv: completed"
+    );
+    Ok(Json(result))
 }
 
 pub async fn get_transaction_members(

@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { NavLink, useLocation } from 'react-router';
 import {
+  Home,
   Receipt,
   FolderOpen,
   BarChart3,
@@ -19,6 +20,8 @@ import {
   Eye,
   EyeOff,
   ChevronRight,
+  Camera,
+  Settings,
 } from 'lucide-react';
 
 import { cn } from '@/utils/cn';
@@ -45,13 +48,16 @@ import {
 } from '@/components/ui/select';
 import * as aiService from '@/services/ai';
 import * as membersService from '@/services/members';
+import { updateProfile } from '@/services/auth';
 import type { LlmConfig, Member } from '@/types';
 import { useToast } from '@/hooks/useToast';
 
 const navItems = [
-  { to: '/', label: '交易记录', icon: Receipt },
+  { to: '/', label: '首页', icon: Home },
+  { to: '/transactions', label: '交易记录', icon: Receipt },
   { to: '/categories', label: '分类管理', icon: FolderOpen },
   { to: '/statistics', label: '统计分析', icon: BarChart3 },
+  { to: '/settings', label: '设置', icon: Settings },
 ];
 
 interface LlmForm {
@@ -75,10 +81,19 @@ interface SidebarProps {
 
 export function Sidebar({ open, onClose }: SidebarProps) {
   const location = useLocation();
-  const { user, logout } = useAuthStore();
+  const { user, logout, login: authLogin } = useAuthStore();
   const { addToast } = useToast();
 
   const [profileOpen, setProfileOpen] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+
+  const [profileEditing, setProfileEditing] = useState(false);
+  const [profileUsername, setProfileUsername] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [profileSaving, setProfileSaving] = useState(false);
 
   const [llmConfig, setLlmConfig] = useState<LlmConfig | null>(null);
   const [llmForm, setLlmForm] = useState<LlmForm>(defaultLlmForm);
@@ -214,6 +229,86 @@ export function Sidebar({ open, onClose }: SidebarProps) {
     }
   }
 
+  async function handleProfileSave() {
+    if (!user) return;
+    if (!profileUsername.trim()) {
+      addToast({ title: '用户名不能为空', variant: 'destructive' });
+      return;
+    }
+    if (newPassword && newPassword.length < 4) {
+      addToast({ title: '新密码至少4个字符', variant: 'destructive' });
+      return;
+    }
+    if (newPassword && newPassword !== confirmNewPassword) {
+      addToast({ title: '两次密码不一致', variant: 'destructive' });
+      return;
+    }
+    if (newPassword && !currentPassword) {
+      addToast({ title: '请输入当前密码', variant: 'destructive' });
+      return;
+    }
+    const payload: Record<string, string> = {};
+    if (profileUsername.trim() !== user.username) {
+      payload.username = profileUsername.trim();
+    }
+    if (newPassword) {
+      payload.current_password = currentPassword;
+      payload.new_password = newPassword;
+    }
+    if (Object.keys(payload).length === 0) {
+      setProfileEditing(false);
+      return;
+    }
+    setProfileSaving(true);
+    try {
+      const resp = await updateProfile(payload);
+      authLogin(resp.token, resp.user);
+      setProfileEditing(false);
+      addToast({ title: '个人信息已更新' });
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? '更新失败';
+      addToast({ title: msg, variant: 'destructive' });
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
+  function handleAvatarSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      addToast({ title: '请选择图片文件', variant: 'destructive' });
+      return;
+    }
+    setAvatarUploading(true);
+    const img = new Image();
+    img.onload = async () => {
+      const canvas = document.createElement('canvas');
+      const size = 200;
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d')!;
+      const min = Math.min(img.width, img.height);
+      const sx = (img.width - min) / 2;
+      const sy = (img.height - min) / 2;
+      ctx.drawImage(img, sx, sy, min, min, 0, 0, size, size);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      URL.revokeObjectURL(img.src);
+      try {
+        const resp = await updateProfile({ avatar_url: dataUrl });
+        authLogin(resp.token, resp.user);
+        addToast({ title: '头像已更新' });
+      } catch {
+        addToast({ title: '头像更新失败', variant: 'destructive' });
+      } finally {
+        setAvatarUploading(false);
+      }
+    };
+    img.src = URL.createObjectURL(file);
+    e.target.value = '';
+  }
+
   return (
     <>
       {open && (
@@ -290,9 +385,17 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             onClick={() => setProfileOpen(true)}
             className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-sidebar-accent/60 transition-all duration-200 cursor-pointer group"
           >
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary/15 to-primary/5 text-primary font-bold text-sm ring-1 ring-primary/10 group-hover:ring-primary/20 transition-all">
-              {user?.nickname?.charAt(0)?.toUpperCase() ?? 'U'}
-            </div>
+            {user?.avatar_url ? (
+              <img
+                src={user.avatar_url}
+                alt="头像"
+                className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-primary/10 group-hover:ring-primary/20 transition-all"
+              />
+            ) : (
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary/15 to-primary/5 text-primary font-bold text-sm ring-1 ring-primary/10 group-hover:ring-primary/20 transition-all">
+                {user?.nickname?.charAt(0)?.toUpperCase() ?? 'U'}
+              </div>
+            )}
             <div className="flex-1 min-w-0 text-left">
               <p className="truncate text-sm font-semibold text-sidebar-foreground">
                 {user?.nickname ?? '用户'}
@@ -317,16 +420,124 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           <div className="space-y-6 py-2">
             {/* ─ Profile Info ─ */}
             <div>
-              <h3 className="text-sm font-semibold text-muted-foreground mb-3">账户信息</h3>
-              {user && (
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label className="text-muted-foreground text-xs">昵称</Label>
-                    <p className="text-sm font-medium mt-0.5">{user.nickname}</p>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-muted-foreground">账户信息</h3>
+                {user && !profileEditing && (
+                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => {
+                    setProfileEditing(true);
+                    setProfileUsername(user.username);
+                    setCurrentPassword('');
+                    setNewPassword('');
+                    setConfirmNewPassword('');
+                  }}>
+                    <Pencil className="h-3 w-3" />
+                    编辑
+                  </Button>
+                )}
+              </div>
+              {user && !profileEditing && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      className="relative group cursor-pointer shrink-0"
+                      onClick={() => avatarInputRef.current?.click()}
+                      disabled={avatarUploading}
+                    >
+                      {user.avatar_url ? (
+                        <img
+                          src={user.avatar_url}
+                          alt="头像"
+                          className="h-12 w-12 rounded-full object-cover ring-2 ring-primary/10"
+                        />
+                      ) : (
+                        <div className="h-12 w-12 rounded-full bg-gradient-to-br from-primary/15 to-primary/5 flex items-center justify-center text-lg font-bold text-primary ring-2 ring-primary/10">
+                          {user.nickname?.charAt(0)?.toUpperCase() ?? 'U'}
+                        </div>
+                      )}
+                      <div className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                        {avatarUploading ? (
+                          <Loader2 className="h-4 w-4 text-white animate-spin" />
+                        ) : (
+                          <Camera className="h-4 w-4 text-white" />
+                        )}
+                      </div>
+                    </button>
+                    <input
+                      ref={avatarInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleAvatarSelect}
+                    />
+                    <div>
+                      <p className="text-sm font-semibold">{user.nickname}</p>
+                      <p className="text-xs text-muted-foreground">{user.username}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {user && profileEditing && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3 mb-1">
+                    <button
+                      type="button"
+                      className="relative group cursor-pointer shrink-0"
+                      onClick={() => avatarInputRef.current?.click()}
+                      disabled={avatarUploading}
+                    >
+                      {user.avatar_url ? (
+                        <img
+                          src={user.avatar_url}
+                          alt="头像"
+                          className="h-12 w-12 rounded-full object-cover ring-2 ring-primary/10"
+                        />
+                      ) : (
+                        <div className="h-12 w-12 rounded-full bg-gradient-to-br from-primary/15 to-primary/5 flex items-center justify-center text-lg font-bold text-primary ring-2 ring-primary/10">
+                          {user.nickname?.charAt(0)?.toUpperCase() ?? 'U'}
+                        </div>
+                      )}
+                      <div className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                        {avatarUploading ? (
+                          <Loader2 className="h-4 w-4 text-white animate-spin" />
+                        ) : (
+                          <Camera className="h-4 w-4 text-white" />
+                        )}
+                      </div>
+                    </button>
+                    <input
+                      ref={avatarInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleAvatarSelect}
+                    />
+                    <span className="text-xs text-muted-foreground">点击头像更换</span>
                   </div>
                   <div>
-                    <Label className="text-muted-foreground text-xs">用户名</Label>
-                    <p className="text-sm font-medium mt-0.5">{user.username}</p>
+                    <Label className="text-xs">用户名</Label>
+                    <Input value={profileUsername} onChange={(e) => setProfileUsername(e.target.value)} placeholder="输入新用户名" className="mt-1 h-9" />
+                  </div>
+                  <Separator />
+                  <p className="text-xs text-muted-foreground">修改密码（不修改可留空）</p>
+                  <div>
+                    <Label className="text-xs">当前密码</Label>
+                    <Input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="输入当前密码" className="mt-1 h-9" autoComplete="current-password" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">新密码</Label>
+                    <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="至少4个字符" className="mt-1 h-9" autoComplete="new-password" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">确认新密码</Label>
+                    <Input type="password" value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} placeholder="再次输入新密码" className="mt-1 h-9" autoComplete="new-password" />
+                  </div>
+                  <div className="flex gap-2 pt-1">
+                    <Button variant="outline" size="sm" className="h-8" onClick={() => setProfileEditing(false)} disabled={profileSaving}>取消</Button>
+                    <Button size="sm" className="h-8" onClick={handleProfileSave} disabled={profileSaving}>
+                      {profileSaving && <Loader2 className="h-3 w-3 animate-spin" />}
+                      保存
+                    </Button>
                   </div>
                 </div>
               )}

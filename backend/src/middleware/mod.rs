@@ -2,6 +2,7 @@ use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::config::AppState;
@@ -16,6 +17,22 @@ pub struct Claims {
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub user_id: Uuid,
+    pub family_id: Uuid,
+}
+
+pub async fn resolve_family(pool: &PgPool, user_id: Uuid) -> Result<Uuid, AppError> {
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT u.default_family_id FROM users u \
+         JOIN family_members fm ON fm.user_id = u.id AND fm.family_id = u.default_family_id \
+         WHERE u.id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(|r| r.0).ok_or_else(|| {
+        AppError::Unauthorized("No valid family membership".to_string())
+    })
 }
 
 impl FromRequestParts<AppState> for AuthUser {
@@ -54,9 +71,10 @@ impl FromRequestParts<AppState> for AuthUser {
             AppError::Unauthorized("Invalid or expired token".to_string())
         })?;
 
-        tracing::debug!(user_id = %token_data.claims.sub, %method, %uri, "auth: authenticated");
-        Ok(AuthUser {
-            user_id: token_data.claims.sub,
-        })
+        let user_id = token_data.claims.sub;
+        let family_id = resolve_family(&state.pool, user_id).await?;
+
+        tracing::debug!(user_id = %user_id, family_id = %family_id, %method, %uri, "auth: authenticated");
+        Ok(AuthUser { user_id, family_id })
     }
 }

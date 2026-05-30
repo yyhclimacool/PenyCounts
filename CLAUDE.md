@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PenyCounts is a family expense tracking web app (Chinese UI) with: categorized transactions, multi-person expense splitting, social gift tracking (红包/礼金), statistics charts, and AI-powered natural language bookkeeping via LLM integration (SSE streaming).
+PenyCounts is a family expense tracking web app (Chinese UI) with: categorized transactions, multi-person expense splitting, social gift tracking (红包/礼金), statistics charts, AI-powered natural language bookkeeping via LLM integration (SSE streaming), and multi-family support.
 
 ## Development Commands
 
@@ -40,6 +40,8 @@ docker compose down              # Stop all services
 
 PostgreSQL 15. Migrations run automatically on backend startup via `sqlx::migrate!()`. Add new migrations as `backend/migrations/NNN_description.sql`.
 
+Access DB in Docker: `docker exec penycounts-postgres-1 psql -U penycounts -d penycounts`
+
 ## Architecture
 
 **Three-service Docker Compose:** postgres → backend (Axum :8080) → frontend (Nginx :80, reverse-proxies `/api/` to backend). Backend Dockerfile uses multi-stage "dummy build" to cache Rust crate compilation separately from app code.
@@ -48,9 +50,13 @@ PostgreSQL 15. Migrations run automatically on backend startup via `sqlx::migrat
 
 **Frontend layers:** Pages (lazy-loaded) → Components → Services (Axios REST + fetch SSE) → Stores (Zustand). Path alias `@/` maps to `src/`.
 
-**Auth flow:** JWT (HS256) stored in localStorage, attached via Axios interceptor. 401 response triggers logout + redirect.
+**Auth flow:** JWT (HS256) stored in localStorage, attached via Axios interceptor. 401 response triggers logout + redirect. Argon2 password hashing in `services/auth.rs`.
 
-**Auth:** Argon2 password hashing in `services/auth.rs`. Endpoints: `POST /api/auth/register`, `POST /api/auth/login`, `PUT /api/auth/profile` (change username/password, requires current password).
+**Multi-family / multi-tenancy:** Each user can belong to multiple families. All data tables (transactions, members, categories, subcategories, social_gifts, llm_configs, chat_messages) are scoped by `family_id`. The `AuthUser` middleware resolves both `user_id` and `family_id` from the JWT — `family_id` comes from the user's `default_family_id`. Registration auto-creates a default family.
+
+- **Read operations** (list, get, stats): pass `auth.family_id` only
+- **Write operations** (create, import): pass both `auth.user_id` (for FK `user_id` column) and `auth.family_id` (for scoping)
+- Family switching: `PUT /api/families/switch` updates `default_family_id`, then frontend reloads
 
 **AI chat:** Backend proxies user messages to a user-configured OpenAI-compatible LLM endpoint. Responses stream via SSE (`POST /api/ai/chat`). System prompt includes user's category tree and defines `create_transaction`/`query_transactions` tools. `POST /api/ai/test-connection` validates LLM config without streaming.
 
@@ -61,11 +67,12 @@ PostgreSQL 15. Migrations run automatically on backend startup via `sqlx::migrat
 - Semantic color tokens: `primary` (indigo), `income` (green), `expense` (red), `muted`, `destructive`
 - **Glassmorphism UI**: Cards/dialogs use semi-transparent backgrounds (`rgba`) + `.glass` utility (backdrop-blur + glass-border + glass-shadow). New components should apply `glass` class for consistency rather than opaque `bg-card` with manual borders.
 - Theme follows system preference via `@media (prefers-color-scheme: dark)` — no manual toggle. Custom tokens `--glass-border` and `--glass-shadow` adapt per theme.
-- Auth uses argon2 password hashing. Login/register require username + password.
 - Database amounts use `NUMERIC(15,2)`, serialized as strings in JSON via `serde(with-str)`
-- System-default categories have `user_id IS NULL`; user-created categories have `user_id` set
+- System-default categories have `user_id IS NULL`; family-created categories have `family_id` set
 - All protected API endpoints require `Authorization: Bearer <JWT>` header
 - Pagination pattern: query params `page` + `per_page`, response wraps in `PaginatedResponse { data, total, page, per_page }`
+- Members table has `UNIQUE (family_id, name)` constraint — member names are unique per family
+- CSV import uses `classify_transaction()` to map free-form category strings from external data to the app's two-level category system
 
 ## Adding a New Feature
 

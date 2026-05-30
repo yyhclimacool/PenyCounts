@@ -40,10 +40,9 @@ pub async fn register(
     let user_id = Uuid::new_v4();
     let now = Utc::now();
 
-    let user = sqlx::query_as::<_, User>(
+    sqlx::query(
         "INSERT INTO users (id, email, password_hash, nickname, email_verified, verification_token, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, true, NULL, $5, $6)
-         RETURNING *",
+         VALUES ($1, $2, $3, $4, true, NULL, $5, $6)",
     )
     .bind(user_id)
     .bind(&username)
@@ -51,8 +50,15 @@ pub async fn register(
     .bind(&username)
     .bind(now)
     .bind(now)
-    .fetch_one(pool)
+    .execute(pool)
     .await?;
+
+    crate::services::family::create_default_family(pool, user_id).await?;
+
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
 
     let token = generate_jwt(config, user.id)?;
 
@@ -83,6 +89,14 @@ pub async fn login(
         token,
         user: UserResponse::from_user(&user),
     })
+}
+
+pub async fn get_me(pool: &PgPool, user_id: Uuid) -> Result<UserResponse, AppError> {
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(UserResponse::from_user(&user))
 }
 
 pub async fn update_profile(
@@ -131,42 +145,49 @@ pub async fn update_profile(
         None
     };
 
+    let has_changes = new_username.is_some() || new_hash.is_some() || req.avatar_url.is_some();
+
     let now = Utc::now();
-    let updated_user = match (&new_username, &new_hash) {
-        (Some(uname), Some(hash)) => {
-            sqlx::query_as::<_, User>(
-                "UPDATE users SET email = $1, nickname = $2, password_hash = $3, updated_at = $4 WHERE id = $5 RETURNING *",
-            )
-            .bind(uname)
-            .bind(uname)
-            .bind(hash)
-            .bind(now)
-            .bind(user_id)
-            .fetch_one(pool)
-            .await?
+    let updated_user = if !has_changes {
+        user
+    } else {
+        let mut sets = Vec::new();
+        let mut param_idx = 1u32;
+
+        if new_username.is_some() {
+            sets.push(format!("email = ${}, nickname = ${}", param_idx, param_idx + 1));
+            param_idx += 2;
         }
-        (Some(uname), None) => {
-            sqlx::query_as::<_, User>(
-                "UPDATE users SET email = $1, nickname = $2, updated_at = $3 WHERE id = $4 RETURNING *",
-            )
-            .bind(uname)
-            .bind(uname)
-            .bind(now)
-            .bind(user_id)
-            .fetch_one(pool)
-            .await?
+        if new_hash.is_some() {
+            sets.push(format!("password_hash = ${param_idx}"));
+            param_idx += 1;
         }
-        (None, Some(hash)) => {
-            sqlx::query_as::<_, User>(
-                "UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3 RETURNING *",
-            )
-            .bind(hash)
-            .bind(now)
-            .bind(user_id)
-            .fetch_one(pool)
-            .await?
+        if req.avatar_url.is_some() {
+            sets.push(format!("avatar_url = ${param_idx}"));
+            param_idx += 1;
         }
-        (None, None) => user,
+        sets.push(format!("updated_at = ${param_idx}"));
+        param_idx += 1;
+
+        let sql = format!(
+            "UPDATE users SET {} WHERE id = ${} RETURNING *",
+            sets.join(", "),
+            param_idx
+        );
+
+        let mut query = sqlx::query_as::<_, User>(&sql);
+        if let Some(uname) = &new_username {
+            query = query.bind(uname).bind(uname);
+        }
+        if let Some(hash) = &new_hash {
+            query = query.bind(hash);
+        }
+        if let Some(avatar) = &req.avatar_url {
+            query = query.bind(avatar);
+        }
+        query = query.bind(now).bind(user_id);
+
+        query.fetch_one(pool).await?
     };
 
     let token = generate_jwt(config, updated_user.id)?;

@@ -1,13 +1,14 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router';
 
 import { useAuthStore } from '@/stores/authStore';
+import { getMe } from '@/services/auth';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Toaster } from '@/components/ui/toast';
 
 const LoginPage = lazy(() => import('@/pages/LoginPage'));
 const RegisterPage = lazy(() => import('@/pages/RegisterPage'));
-// const DashboardPage = lazy(() => import('@/pages/DashboardPage'));
+const DashboardPage = lazy(() => import('@/pages/DashboardPage'));
 const TransactionsPage = lazy(() => import('@/pages/TransactionsPage'));
 // const SocialGiftsPage = lazy(() => import('@/pages/SocialGiftsPage'));
 const CategoriesPage = lazy(() => import('@/pages/CategoriesPage'));
@@ -39,6 +40,16 @@ function PageLoader() {
 }
 
 export default function App() {
+  const token = useAuthStore((s) => s.token);
+  const user = useAuthStore((s) => s.user);
+  const setUser = useAuthStore((s) => s.setUser);
+
+  useEffect(() => {
+    if (token && !user) {
+      getMe().then(setUser).catch(() => {});
+    }
+  }, [token, user, setUser]);
+
   return (
     <>
       <Suspense fallback={<PageLoader />}>
@@ -67,7 +78,7 @@ export default function App() {
               </RequireAuth>
             }
           >
-            <Route index element={<TransactionsPage />} />
+            <Route index element={<DashboardPage />} />
             <Route path="transactions" element={<TransactionsPage />} />
             <Route path="categories" element={<CategoriesPage />} />
             <Route path="statistics" element={<StatisticsPage />} />

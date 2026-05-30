@@ -10,21 +10,21 @@ use crate::models::{
 
 pub async fn monthly_trend(
     pool: &PgPool,
-    user_id: Uuid,
+    family_id: Uuid,
     year: i32,
 ) -> Result<Vec<MonthlyTrendItem>, AppError> {
-    tracing::debug!(user_id = %user_id, year = year, "svc::monthly_trend: querying");
+    tracing::debug!(family_id = %family_id, year = year, "svc::monthly_trend: querying");
     let rows = sqlx::query_as::<_, MonthlyTrendItem>(
         "SELECT
              EXTRACT(MONTH FROM date)::int4 AS month,
              COALESCE(SUM(CASE WHEN type = 'income'  THEN amount ELSE 0 END), 0) AS income,
              COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense
          FROM transactions
-         WHERE user_id = $1 AND EXTRACT(YEAR FROM date)::int4 = $2
+         WHERE family_id = $1 AND EXTRACT(YEAR FROM date)::int4 = $2
          GROUP BY EXTRACT(MONTH FROM date)
          ORDER BY month",
     )
-    .bind(user_id)
+    .bind(family_id)
     .bind(year)
     .fetch_all(pool)
     .await?;
@@ -35,19 +35,19 @@ pub async fn monthly_trend(
 
 pub async fn monthly_detail(
     pool: &PgPool,
-    user_id: Uuid,
+    family_id: Uuid,
     year: i32,
     month: u32,
 ) -> Result<Vec<Transaction>, AppError> {
-    tracing::debug!(user_id = %user_id, year = year, month = month, "svc::monthly_detail: querying");
+    tracing::debug!(family_id = %family_id, year = year, month = month, "svc::monthly_detail: querying");
     let transactions = sqlx::query_as::<_, Transaction>(
         "SELECT * FROM transactions
-         WHERE user_id = $1
+         WHERE family_id = $1
            AND EXTRACT(YEAR FROM date)::int4 = $2
            AND EXTRACT(MONTH FROM date)::int4 = $3
          ORDER BY date DESC, time DESC",
     )
-    .bind(user_id)
+    .bind(family_id)
     .bind(year)
     .bind(month as i32)
     .fetch_all(pool)
@@ -59,14 +59,14 @@ pub async fn monthly_detail(
 
 pub async fn category_breakdown(
     pool: &PgPool,
-    user_id: Uuid,
+    family_id: Uuid,
     year: i32,
     month: Option<u32>,
     txn_type: Option<&str>,
 ) -> Result<Vec<CategoryBreakdown>, AppError> {
     let effective_type = txn_type.unwrap_or("expense");
     tracing::debug!(
-        user_id = %user_id,
+        family_id = %family_id,
         year = year,
         month = ?month,
         effective_type = effective_type,
@@ -81,14 +81,14 @@ pub async fn category_breakdown(
              0.0::float8 AS percentage
          FROM transactions t
          JOIN categories c ON t.category_id = c.id
-         WHERE t.user_id = $1
+         WHERE t.family_id = $1
            AND EXTRACT(YEAR FROM t.date)::int4 = $2
            AND ($3::int4 IS NULL OR EXTRACT(MONTH FROM t.date)::int4 = $3)
            AND t.type = $4
          GROUP BY c.name, c.icon
          ORDER BY total DESC",
     )
-    .bind(user_id)
+    .bind(family_id)
     .bind(year)
     .bind(month.map(|m| m as i32))
     .bind(effective_type)
@@ -111,13 +111,13 @@ pub async fn category_breakdown(
 
 pub async fn member_breakdown(
     pool: &PgPool,
-    user_id: Uuid,
+    family_id: Uuid,
     year: i32,
     month: Option<u32>,
     txn_type: Option<&str>,
 ) -> Result<Vec<MemberBreakdown>, AppError> {
     tracing::debug!(
-        user_id = %user_id,
+        family_id = %family_id,
         year = year,
         month = ?month,
         r#type = ?txn_type,
@@ -129,14 +129,14 @@ pub async fn member_breakdown(
              COALESCE(SUM(tm.share_amount), 0) AS total
          FROM transaction_members tm
          JOIN transactions t ON tm.transaction_id = t.id
-         WHERE t.user_id = $1
+         WHERE t.family_id = $1
            AND EXTRACT(YEAR FROM t.date)::int4 = $2
            AND ($3::int4 IS NULL OR EXTRACT(MONTH FROM t.date)::int4 = $3)
            AND ($4::text IS NULL OR t.type = $4)
          GROUP BY tm.member_name
          ORDER BY total DESC",
     )
-    .bind(user_id)
+    .bind(family_id)
     .bind(year)
     .bind(month.map(|m| m as i32))
     .bind(txn_type)
@@ -149,10 +149,10 @@ pub async fn member_breakdown(
 
 pub async fn social_summary(
     pool: &PgPool,
-    user_id: Uuid,
+    family_id: Uuid,
     year: i32,
 ) -> Result<Vec<SocialSummary>, AppError> {
-    tracing::debug!(user_id = %user_id, year = year, "svc::social_summary: querying from transactions");
+    tracing::debug!(family_id = %family_id, year = year, "svc::social_summary: querying from transactions");
     let rows = sqlx::query_as::<_, SocialSummary>(
         "SELECT
              tm.member_name AS person_name,
@@ -166,13 +166,13 @@ pub async fn social_summary(
          FROM transactions t
          JOIN categories c ON t.category_id = c.id
          JOIN transaction_members tm ON tm.transaction_id = t.id
-         WHERE t.user_id = $1
+         WHERE t.family_id = $1
            AND EXTRACT(YEAR FROM t.date)::int4 = $2
            AND c.name LIKE '%人情%'
          GROUP BY tm.member_name
          ORDER BY tm.member_name",
     )
-    .bind(user_id)
+    .bind(family_id)
     .bind(year)
     .fetch_all(pool)
     .await?;
@@ -183,24 +183,24 @@ pub async fn social_summary(
 
 pub async fn daily_trend(
     pool: &PgPool,
-    user_id: Uuid,
+    family_id: Uuid,
     year: i32,
     month: u32,
 ) -> Result<Vec<DailyTrendItem>, AppError> {
-    tracing::debug!(user_id = %user_id, year = year, month = month, "svc::daily_trend: querying");
+    tracing::debug!(family_id = %family_id, year = year, month = month, "svc::daily_trend: querying");
     let rows = sqlx::query_as::<_, DailyTrendItem>(
         "SELECT
              EXTRACT(DAY FROM date)::int4 AS day,
              COALESCE(SUM(CASE WHEN type = 'income'  THEN amount ELSE 0 END), 0) AS income,
              COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense
          FROM transactions
-         WHERE user_id = $1
+         WHERE family_id = $1
            AND EXTRACT(YEAR FROM date)::int4 = $2
            AND EXTRACT(MONTH FROM date)::int4 = $3
          GROUP BY EXTRACT(DAY FROM date)
          ORDER BY day",
     )
-    .bind(user_id)
+    .bind(family_id)
     .bind(year)
     .bind(month as i32)
     .fetch_all(pool)
@@ -212,20 +212,20 @@ pub async fn daily_trend(
 
 pub async fn yearly_trend(
     pool: &PgPool,
-    user_id: Uuid,
+    family_id: Uuid,
 ) -> Result<Vec<YearlyTrendItem>, AppError> {
-    tracing::debug!(user_id = %user_id, "svc::yearly_trend: querying");
+    tracing::debug!(family_id = %family_id, "svc::yearly_trend: querying");
     let rows = sqlx::query_as::<_, YearlyTrendItem>(
         "SELECT
              EXTRACT(YEAR FROM date)::int4 AS year,
              COALESCE(SUM(CASE WHEN type = 'income'  THEN amount ELSE 0 END), 0) AS income,
              COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense
          FROM transactions
-         WHERE user_id = $1
+         WHERE family_id = $1
          GROUP BY EXTRACT(YEAR FROM date)
          ORDER BY year",
     )
-    .bind(user_id)
+    .bind(family_id)
     .fetch_all(pool)
     .await?;
     tracing::debug!(rows = rows.len(), "svc::yearly_trend: done");

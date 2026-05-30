@@ -5,7 +5,9 @@ FROM docker.m.daocloud.io/library/rust:1-slim-bookworm AS deps
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY backend/Cargo.toml backend/Cargo.lock ./
 
@@ -31,7 +33,8 @@ RUN touch src/main.rs && cargo build --release --locked
 # =============================================================================
 FROM docker.m.daocloud.io/library/debian:bookworm-slim AS runtime
 
-RUN apt-get update \
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

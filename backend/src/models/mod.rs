@@ -13,14 +13,35 @@ pub struct User {
     pub nickname: String,
     pub email_verified: bool,
     pub verification_token: Option<String>,
+    pub avatar_url: Option<String>,
+    pub default_family_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Family {
+    pub id: Uuid,
+    pub name: String,
+    pub invite_code: String,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct FamilyMember {
+    pub id: Uuid,
+    pub family_id: Uuid,
+    pub user_id: Uuid,
+    pub role: String,
+    pub joined_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Category {
     pub id: Uuid,
     pub user_id: Option<Uuid>,
+    pub family_id: Option<Uuid>,
     pub name: String,
     pub r#type: String,
     pub icon: String,
@@ -32,6 +53,7 @@ pub struct Subcategory {
     pub id: Uuid,
     pub category_id: Uuid,
     pub user_id: Option<Uuid>,
+    pub family_id: Option<Uuid>,
     pub name: String,
     pub icon: String,
     pub sort_order: i32,
@@ -41,6 +63,7 @@ pub struct Subcategory {
 pub struct CategoryWithSubs {
     pub id: Uuid,
     pub user_id: Option<Uuid>,
+    pub family_id: Option<Uuid>,
     pub name: String,
     pub r#type: String,
     pub icon: String,
@@ -52,6 +75,7 @@ pub struct CategoryWithSubs {
 pub struct Transaction {
     pub id: Uuid,
     pub user_id: Uuid,
+    pub family_id: Uuid,
     pub category_id: Uuid,
     pub subcategory_id: Option<Uuid>,
     pub r#type: String,
@@ -83,6 +107,7 @@ pub struct TransactionMember {
 pub struct Member {
     pub id: Uuid,
     pub user_id: Uuid,
+    pub family_id: Uuid,
     pub name: String,
 }
 
@@ -90,6 +115,7 @@ pub struct Member {
 pub struct SocialGift {
     pub id: Uuid,
     pub user_id: Uuid,
+    pub family_id: Uuid,
     pub r#type: String,
     pub person_name: String,
     pub relation: Option<String>,
@@ -105,6 +131,7 @@ pub struct SocialGift {
 pub struct LlmConfig {
     pub id: Uuid,
     pub user_id: Uuid,
+    pub family_id: Uuid,
     pub provider: String,
     pub api_url: String,
     pub api_key: Option<String>,
@@ -116,6 +143,7 @@ pub struct LlmConfig {
 pub struct ChatMessage {
     pub id: Uuid,
     pub user_id: Uuid,
+    pub family_id: Uuid,
     pub role: String,
     pub content: String,
     pub created_at: DateTime<Utc>,
@@ -140,6 +168,7 @@ pub struct UpdateProfileRequest {
     pub username: Option<String>,
     pub current_password: Option<String>,
     pub new_password: Option<String>,
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -200,13 +229,36 @@ pub struct ChatRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct CreateFamilyRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct JoinFamilyRequest {
+    pub invite_code: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SwitchFamilyRequest {
+    pub family_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportCsvRequest {
+    pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TransactionFilter {
     pub start_date: Option<NaiveDate>,
     pub end_date: Option<NaiveDate>,
     pub category_id: Option<Uuid>,
+    pub subcategory_id: Option<Uuid>,
     pub r#type: Option<String>,
     pub search: Option<String>,
     pub member_name: Option<String>,
+    pub min_amount: Option<Decimal>,
+    pub max_amount: Option<Decimal>,
     pub page: Option<u32>,
     pub per_page: Option<u32>,
 }
@@ -258,6 +310,35 @@ pub struct UserResponse {
     pub id: Uuid,
     pub username: String,
     pub nickname: String,
+    pub avatar_url: Option<String>,
+    pub default_family_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct FamilyResponse {
+    pub id: Uuid,
+    pub name: String,
+    pub invite_code: String,
+    pub role: String,
+    pub member_count: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FamilyDetailResponse {
+    pub id: Uuid,
+    pub name: String,
+    pub invite_code: String,
+    pub members: Vec<FamilyMemberInfo>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct FamilyMemberInfo {
+    pub user_id: Uuid,
+    pub nickname: String,
+    pub avatar_url: Option<String>,
+    pub role: String,
+    pub joined_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize)]
@@ -311,12 +392,22 @@ pub struct YearlyTrendItem {
     pub expense: Decimal,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ImportResult {
+    pub total: usize,
+    pub imported: usize,
+    pub skipped: usize,
+    pub errors: Vec<String>,
+}
+
 impl UserResponse {
     pub fn from_user(user: &User) -> Self {
         Self {
             id: user.id,
             username: user.email.clone(),
             nickname: user.nickname.clone(),
+            avatar_url: user.avatar_url.clone(),
+            default_family_id: user.default_family_id,
         }
     }
 }

@@ -16,12 +16,12 @@ use crate::services::transaction;
 
 // ── LLM config CRUD ──────────────────────────────────────────────────
 
-pub async fn get_llm_configs(pool: &PgPool, user_id: Uuid) -> Result<Vec<LlmConfig>, AppError> {
-    tracing::debug!(user_id = %user_id, "svc::get_llm_configs: querying");
+pub async fn get_llm_configs(pool: &PgPool, family_id: Uuid) -> Result<Vec<LlmConfig>, AppError> {
+    tracing::debug!(family_id = %family_id, "svc::get_llm_configs: querying");
     let configs = sqlx::query_as::<_, LlmConfig>(
-        "SELECT * FROM llm_configs WHERE user_id = $1 ORDER BY is_active DESC, provider",
+        "SELECT * FROM llm_configs WHERE family_id = $1 ORDER BY is_active DESC, provider",
     )
-    .bind(user_id)
+    .bind(family_id)
     .fetch_all(pool)
     .await?;
     tracing::debug!(count = configs.len(), "svc::get_llm_configs: done");
@@ -31,23 +31,23 @@ pub async fn get_llm_configs(pool: &PgPool, user_id: Uuid) -> Result<Vec<LlmConf
 
 pub async fn create_llm_config(
     pool: &PgPool,
-    user_id: Uuid,
+    family_id: Uuid,
     req: LlmConfigRequest,
 ) -> Result<LlmConfig, AppError> {
-    tracing::debug!(user_id = %user_id, provider = %req.provider, model = %req.model_name, "svc::create_llm_config: deactivating old configs");
-    sqlx::query("UPDATE llm_configs SET is_active = false WHERE user_id = $1")
-        .bind(user_id)
+    tracing::debug!(family_id = %family_id, provider = %req.provider, model = %req.model_name, "svc::create_llm_config: deactivating old configs");
+    sqlx::query("UPDATE llm_configs SET is_active = false WHERE family_id = $1")
+        .bind(family_id)
         .execute(pool)
         .await?;
 
     tracing::debug!("svc::create_llm_config: inserting new config");
     let config = sqlx::query_as::<_, LlmConfig>(
-        "INSERT INTO llm_configs (id, user_id, provider, api_url, api_key, model_name, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, true)
+        "INSERT INTO llm_configs (id, user_id, family_id, provider, api_url, api_key, model_name, is_active)
+         VALUES ($1, $1, $2, $3, $4, $5, $6, true)
          RETURNING *",
     )
     .bind(Uuid::new_v4())
-    .bind(user_id)
+    .bind(family_id)
     .bind(&req.provider)
     .bind(&req.api_url)
     .bind(&req.api_key)
@@ -61,15 +61,15 @@ pub async fn create_llm_config(
 
 pub async fn update_llm_config(
     pool: &PgPool,
-    user_id: Uuid,
+    family_id: Uuid,
     config_id: Uuid,
     req: LlmConfigRequest,
 ) -> Result<LlmConfig, AppError> {
-    tracing::debug!(user_id = %user_id, config_id = %config_id, provider = %req.provider, model = %req.model_name, "svc::update_llm_config: executing UPDATE");
+    tracing::debug!(family_id = %family_id, config_id = %config_id, provider = %req.provider, model = %req.model_name, "svc::update_llm_config: executing UPDATE");
     let config = sqlx::query_as::<_, LlmConfig>(
         "UPDATE llm_configs
          SET provider = $1, api_url = $2, api_key = $3, model_name = $4
-         WHERE id = $5 AND user_id = $6
+         WHERE id = $5 AND family_id = $6
          RETURNING *",
     )
     .bind(&req.provider)
@@ -77,7 +77,7 @@ pub async fn update_llm_config(
     .bind(&req.api_key)
     .bind(&req.model_name)
     .bind(config_id)
-    .bind(user_id)
+    .bind(family_id)
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| {
@@ -91,21 +91,21 @@ pub async fn update_llm_config(
 
 pub async fn set_active_llm_config(
     pool: &PgPool,
-    user_id: Uuid,
+    family_id: Uuid,
     config_id: Uuid,
 ) -> Result<(), AppError> {
-    tracing::debug!(user_id = %user_id, config_id = %config_id, "svc::set_active_llm_config: deactivating all");
-    sqlx::query("UPDATE llm_configs SET is_active = false WHERE user_id = $1")
-        .bind(user_id)
+    tracing::debug!(family_id = %family_id, config_id = %config_id, "svc::set_active_llm_config: deactivating all");
+    sqlx::query("UPDATE llm_configs SET is_active = false WHERE family_id = $1")
+        .bind(family_id)
         .execute(pool)
         .await?;
 
     tracing::debug!("svc::set_active_llm_config: activating target");
     let result = sqlx::query(
-        "UPDATE llm_configs SET is_active = true WHERE id = $1 AND user_id = $2",
+        "UPDATE llm_configs SET is_active = true WHERE id = $1 AND family_id = $2",
     )
     .bind(config_id)
-    .bind(user_id)
+    .bind(family_id)
     .execute(pool)
     .await?;
 
@@ -119,14 +119,14 @@ pub async fn set_active_llm_config(
 
 pub async fn delete_llm_config(
     pool: &PgPool,
-    user_id: Uuid,
+    family_id: Uuid,
     config_id: Uuid,
 ) -> Result<(), AppError> {
-    tracing::debug!(user_id = %user_id, config_id = %config_id, "svc::delete_llm_config: executing DELETE");
+    tracing::debug!(family_id = %family_id, config_id = %config_id, "svc::delete_llm_config: executing DELETE");
     let result =
-        sqlx::query("DELETE FROM llm_configs WHERE id = $1 AND user_id = $2")
+        sqlx::query("DELETE FROM llm_configs WHERE id = $1 AND family_id = $2")
             .bind(config_id)
-            .bind(user_id)
+            .bind(family_id)
             .execute(pool)
             .await?;
 
@@ -210,13 +210,13 @@ pub async fn test_llm_connection(
 
 pub async fn get_chat_history(
     pool: &PgPool,
-    user_id: Uuid,
+    family_id: Uuid,
 ) -> Result<Vec<ChatMessage>, AppError> {
-    tracing::debug!(user_id = %user_id, "svc::get_chat_history: querying");
+    tracing::debug!(family_id = %family_id, "svc::get_chat_history: querying");
     let messages = sqlx::query_as::<_, ChatMessage>(
-        "SELECT * FROM chat_messages WHERE user_id = $1 ORDER BY created_at ASC",
+        "SELECT * FROM chat_messages WHERE family_id = $1 ORDER BY created_at ASC",
     )
-    .bind(user_id)
+    .bind(family_id)
     .fetch_all(pool)
     .await?;
     tracing::debug!(count = messages.len(), "svc::get_chat_history: done");
@@ -224,10 +224,10 @@ pub async fn get_chat_history(
     Ok(messages)
 }
 
-pub async fn clear_chat_history(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
-    tracing::debug!(user_id = %user_id, "svc::clear_chat_history: deleting");
-    let result = sqlx::query("DELETE FROM chat_messages WHERE user_id = $1")
-        .bind(user_id)
+pub async fn clear_chat_history(pool: &PgPool, family_id: Uuid) -> Result<(), AppError> {
+    tracing::debug!(family_id = %family_id, "svc::clear_chat_history: deleting");
+    let result = sqlx::query("DELETE FROM chat_messages WHERE family_id = $1")
+        .bind(family_id)
         .execute(pool)
         .await?;
     tracing::debug!(rows_deleted = result.rows_affected(), "svc::clear_chat_history: done");
@@ -237,14 +237,15 @@ pub async fn clear_chat_history(pool: &PgPool, user_id: Uuid) -> Result<(), AppE
 pub async fn chat_stream(
     pool: &PgPool,
     user_id: Uuid,
+    family_id: Uuid,
     message: String,
 ) -> Result<impl futures::Stream<Item = Result<Event, Infallible>>, AppError> {
-    tracing::debug!(user_id = %user_id, message_len = message.len(), "svc::chat_stream: starting");
+    tracing::debug!(family_id = %family_id, message_len = message.len(), "svc::chat_stream: starting");
 
     let llm_config = sqlx::query_as::<_, LlmConfig>(
-        "SELECT * FROM llm_configs WHERE user_id = $1 AND is_active = true LIMIT 1",
+        "SELECT * FROM llm_configs WHERE family_id = $1 AND is_active = true LIMIT 1",
     )
-    .bind(user_id)
+    .bind(family_id)
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| {
@@ -252,37 +253,37 @@ pub async fn chat_stream(
     })?;
 
     sqlx::query(
-        "INSERT INTO chat_messages (id, user_id, role, content, created_at)
-         VALUES ($1, $2, 'user', $3, $4)",
+        "INSERT INTO chat_messages (id, user_id, family_id, role, content, created_at)
+         VALUES ($1, $1, $2, 'user', $3, $4)",
     )
     .bind(Uuid::new_v4())
-    .bind(user_id)
+    .bind(family_id)
     .bind(&message)
     .bind(Utc::now())
     .execute(pool)
     .await?;
 
     let categories = sqlx::query_as::<_, Category>(
-        "SELECT * FROM categories WHERE user_id IS NULL OR user_id = $1 ORDER BY type, sort_order",
+        "SELECT * FROM categories WHERE user_id IS NULL OR family_id = $1 ORDER BY type, sort_order",
     )
-    .bind(user_id)
+    .bind(family_id)
     .fetch_all(pool)
     .await?;
 
     let subcategories = sqlx::query_as::<_, Subcategory>(
         "SELECT s.* FROM subcategories s
          JOIN categories c ON s.category_id = c.id
-         WHERE c.user_id IS NULL OR c.user_id = $1
+         WHERE c.user_id IS NULL OR c.family_id = $1
          ORDER BY s.sort_order",
     )
-    .bind(user_id)
+    .bind(family_id)
     .fetch_all(pool)
     .await?;
 
     let members = sqlx::query_as::<_, Member>(
-        "SELECT * FROM members WHERE user_id = $1 ORDER BY name",
+        "SELECT * FROM members WHERE family_id = $1 ORDER BY name",
     )
-    .bind(user_id)
+    .bind(family_id)
     .fetch_all(pool)
     .await?;
 
@@ -338,9 +339,9 @@ pub async fn chat_stream(
     );
 
     let history = sqlx::query_as::<_, ChatMessage>(
-        "SELECT * FROM chat_messages WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20",
+        "SELECT * FROM chat_messages WHERE family_id = $1 ORDER BY created_at DESC LIMIT 20",
     )
-    .bind(user_id)
+    .bind(family_id)
     .fetch_all(pool)
     .await?;
 
@@ -484,6 +485,7 @@ pub async fn chat_stream(
 
     let pool_clone = pool.clone();
     let user_id_clone = user_id;
+    let family_id_clone = family_id;
     let api_url = llm_config.api_url.clone();
     let api_key_clone = api_key.clone();
     let model_name = llm_config.model_name.clone();
@@ -552,7 +554,7 @@ pub async fn chat_stream(
         if has_tool_call && tool_call_name == "create_transaction" {
             tracing::debug!(args = %tool_call_args, "svc::chat_stream: executing create_transaction");
 
-            match execute_create_transaction(&pool_clone, user_id_clone, &tool_call_args).await {
+            match execute_create_transaction(&pool_clone, user_id_clone, family_id_clone, &tool_call_args).await {
                 Ok(summary) => {
                     full_response.push_str(&summary);
                     let result_json = serde_json::json!({
@@ -578,7 +580,7 @@ pub async fn chat_stream(
         } else if has_tool_call && tool_call_name == "query_transactions" {
             tracing::debug!(args = %tool_call_args, "svc::chat_stream: executing query_transactions");
 
-            match execute_query_transactions(&pool_clone, user_id_clone, &tool_call_args).await {
+            match execute_query_transactions(&pool_clone, family_id_clone, &tool_call_args).await {
                 Ok(query_result_text) => {
                     // Build second LLM request with tool result
                     let mut second_messages = messages_clone.clone();
@@ -670,11 +672,11 @@ pub async fn chat_stream(
         // Save assistant response
         if !full_response.is_empty() {
             let _ = sqlx::query(
-                "INSERT INTO chat_messages (id, user_id, role, content, created_at)
-                 VALUES ($1, $2, 'assistant', $3, $4)",
+                "INSERT INTO chat_messages (id, user_id, family_id, role, content, created_at)
+                 Values ($1, $1, $2, 'assistant', $3, $4)",
             )
             .bind(Uuid::new_v4())
-            .bind(user_id_clone)
+            .bind(family_id_clone)
             .bind(&full_response)
             .bind(Utc::now())
             .execute(&pool_clone)
@@ -688,6 +690,7 @@ pub async fn chat_stream(
 async fn execute_create_transaction(
     pool: &PgPool,
     user_id: Uuid,
+    family_id: Uuid,
     args_json: &str,
 ) -> Result<String, String> {
     let args: serde_json::Value =
@@ -716,10 +719,10 @@ async fn execute_create_transaction(
 
     // Resolve category
     let category = sqlx::query_as::<_, Category>(
-        "SELECT * FROM categories WHERE name = $1 AND (user_id IS NULL OR user_id = $2) LIMIT 1",
+        "SELECT * FROM categories WHERE name = $1 AND (user_id IS NULL OR family_id = $2) LIMIT 1",
     )
     .bind(category_name)
-    .bind(user_id)
+    .bind(family_id)
     .fetch_optional(pool)
     .await
     .map_err(|e| format!("查询分类失败: {}", e))?
@@ -767,7 +770,7 @@ async fn execute_create_transaction(
         members,
     };
 
-    let txn = transaction::create_transaction(pool, user_id, req)
+    let txn = transaction::create_transaction(pool, user_id, family_id, req)
         .await
         .map_err(|e| format!("创建交易失败: {}", e))?;
 
@@ -808,7 +811,7 @@ async fn execute_create_transaction(
 
 async fn execute_query_transactions(
     pool: &PgPool,
-    user_id: Uuid,
+    family_id: Uuid,
     args_json: &str,
 ) -> Result<String, String> {
     let args: serde_json::Value =
@@ -833,10 +836,10 @@ async fn execute_query_transactions(
     // Resolve category_name → category_id
     let category_id = if let Some(cat_name) = category_name {
         let cat = sqlx::query_as::<_, Category>(
-            "SELECT * FROM categories WHERE name = $1 AND (user_id IS NULL OR user_id = $2) LIMIT 1",
+            "SELECT * FROM categories WHERE name = $1 AND (user_id IS NULL OR family_id = $2) LIMIT 1",
         )
         .bind(cat_name)
-        .bind(user_id)
+        .bind(family_id)
         .fetch_optional(pool)
         .await
         .map_err(|e| format!("查询分类失败: {}", e))?;
@@ -849,22 +852,25 @@ async fn execute_query_transactions(
         start_date: Some(start_date),
         end_date: Some(end_date),
         category_id,
+        subcategory_id: None,
         r#type: txn_type,
         search: None,
         member_name,
+        min_amount: None,
+        max_amount: None,
         page: Some(1),
         per_page: Some(100),
     };
 
-    let result = transaction::list_transactions(pool, user_id, filter)
+    let result = transaction::list_transactions(pool, family_id, filter)
         .await
         .map_err(|e| format!("查询交易失败: {}", e))?;
 
     // Also fetch category names for display
     let cat_map: std::collections::HashMap<Uuid, String> = sqlx::query_as::<_, Category>(
-        "SELECT * FROM categories WHERE user_id IS NULL OR user_id = $1",
+        "SELECT * FROM categories WHERE user_id IS NULL OR family_id = $1",
     )
-    .bind(user_id)
+    .bind(family_id)
     .fetch_all(pool)
     .await
     .map_err(|e| format!("查询分类失败: {}", e))?

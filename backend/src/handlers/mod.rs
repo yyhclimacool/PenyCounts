@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod auth;
 pub mod categories;
+pub mod family;
 pub mod members;
 pub mod social_gifts;
 pub mod stats;
@@ -43,6 +44,7 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
         // Auth (public)
         .route("/api/auth/register", axum::routing::post(auth::register))
         .route("/api/auth/login", axum::routing::post(auth::login))
+        .route("/api/auth/me", axum::routing::get(auth::me))
         .route("/api/auth/profile", axum::routing::put(auth::update_profile))
         // Categories
         .route(
@@ -77,6 +79,18 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
             axum::routing::get(transactions::get_transaction)
                 .put(transactions::update_transaction)
                 .delete(transactions::delete_transaction),
+        )
+        .route(
+            "/api/transactions/import",
+            axum::routing::post(transactions::import_csv),
+        )
+        .route(
+            "/api/transactions/export",
+            axum::routing::get(transactions::export_csv),
+        )
+        .route(
+            "/api/transactions/clear",
+            axum::routing::delete(transactions::clear_all_transactions),
         )
         .route(
             "/api/transactions/{id}/members",
@@ -156,6 +170,31 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
         .route(
             "/api/ai/chat/history",
             axum::routing::get(ai::chat_history).delete(ai::clear_history),
+        )
+        // Families
+        .route(
+            "/api/families",
+            axum::routing::get(family::list_families).post(family::create_family),
+        )
+        .route(
+            "/api/families/join",
+            axum::routing::post(family::join_family),
+        )
+        .route(
+            "/api/families/switch",
+            axum::routing::put(family::switch_default_family),
+        )
+        .route(
+            "/api/families/{id}",
+            axum::routing::get(family::get_family_detail),
+        )
+        .route(
+            "/api/families/{id}/leave",
+            axum::routing::post(family::leave_family),
+        )
+        .route(
+            "/api/families/{id}/regenerate-code",
+            axum::routing::post(family::regenerate_invite_code),
         )
         // Health
         .route("/api/health", axum::routing::get(health))

@@ -25,6 +25,14 @@ pub async fn login(
     Ok(Json(resp))
 }
 
+pub async fn me(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<crate::models::UserResponse>, AppError> {
+    let resp = services::auth::get_me(&state.pool, auth.user_id).await?;
+    Ok(Json(resp))
+}
+
 pub async fn update_profile(
     State(state): State<AppState>,
     auth: AuthUser,

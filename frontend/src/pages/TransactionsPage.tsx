@@ -9,8 +9,12 @@ import {
   ReceiptText,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   X,
   Loader2,
+  Upload,
+  Download,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -80,11 +84,15 @@ export default function TransactionsPage() {
 
   const [filterType, setFilterType] = useState<string>('all');
   const [filterCategoryId, setFilterCategoryId] = useState<string>('all');
+  const [filterSubcategoryId, setFilterSubcategoryId] = useState<string>('all');
   const [filterMember, setFilterMember] = useState<string>('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [minAmount, setMinAmount] = useState('');
+  const [maxAmount, setMaxAmount] = useState('');
   const [searchText, setSearchText] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const [categories, setCategories] = useState<Category[]>([]);
@@ -99,6 +107,9 @@ export default function TransactionsPage() {
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchTransactions = useCallback(async () => {
     setLoading(true);
@@ -109,9 +120,12 @@ export default function TransactionsPage() {
       };
       if (filterType !== 'all') filters.type = filterType;
       if (filterCategoryId !== 'all') filters.category_id = filterCategoryId;
+      if (filterSubcategoryId !== 'all') filters.subcategory_id = filterSubcategoryId;
       if (filterMember !== 'all') filters.member_name = filterMember;
       if (dateFrom) filters.start_date = dateFrom;
       if (dateTo) filters.end_date = dateTo;
+      if (minAmount) filters.min_amount = minAmount;
+      if (maxAmount) filters.max_amount = maxAmount;
       if (searchText.trim()) filters.search = searchText.trim();
       const res = await transactionsService.list(filters);
       setTransactions(res.data);
@@ -121,7 +135,7 @@ export default function TransactionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterType, filterCategoryId, filterMember, dateFrom, dateTo, searchText, addToast]);
+  }, [page, filterType, filterCategoryId, filterSubcategoryId, filterMember, dateFrom, dateTo, minAmount, maxAmount, searchText, addToast]);
 
   useEffect(() => {
     fetchTransactions();
@@ -179,6 +193,12 @@ export default function TransactionsPage() {
     () => categories.find((c) => c.id === form.category_id),
     [categories, form.category_id],
   );
+
+  const filterSubcategories = useMemo(() => {
+    if (filterCategoryId === 'all') return [];
+    const cat = categories.find((c) => c.id === filterCategoryId);
+    return cat?.subcategories ?? [];
+  }, [categories, filterCategoryId]);
 
   function openAddDialog() {
     setEditingTx(null);
@@ -264,6 +284,51 @@ export default function TransactionsPage() {
     }
   }
 
+  async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    setImporting(true);
+    try {
+      const content = await file.text();
+      const result = await transactionsService.importCsv(content);
+      addToast({
+        title: `导入完成：共 ${result.total} 条，成功 ${result.imported} 条${result.skipped > 0 ? `，跳过 ${result.skipped} 条` : ''}`,
+      });
+      if (result.imported > 0) {
+        fetchTransactions();
+        Promise.all([categoriesService.getAll(), membersService.list()]).then(
+          ([cats, mems]) => { setCategories(cats); setAllMembers(mems); },
+        );
+      }
+    } catch {
+      addToast({ title: '导入失败', variant: 'destructive' });
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const filters: Record<string, unknown> = {};
+      if (filterType !== 'all') filters.type = filterType;
+      if (filterCategoryId !== 'all') filters.category_id = filterCategoryId;
+      if (filterSubcategoryId !== 'all') filters.subcategory_id = filterSubcategoryId;
+      if (filterMember !== 'all') filters.member_name = filterMember;
+      if (dateFrom) filters.start_date = dateFrom;
+      if (dateTo) filters.end_date = dateTo;
+      if (minAmount) filters.min_amount = minAmount;
+      if (maxAmount) filters.max_amount = maxAmount;
+      await transactionsService.exportCsv(filters);
+      addToast({ title: '导出成功' });
+    } catch {
+      addToast({ title: '导出失败', variant: 'destructive' });
+    } finally {
+      setExporting(false);
+    }
+  }
+
   function handleMemberKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if ((e.key === 'Enter' || e.key === ',') && memberInput.trim()) {
       e.preventDefault();
@@ -300,10 +365,35 @@ export default function TransactionsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight">交易记录</h1>
-        <Button onClick={openAddDialog}>
-          <Plus className="h-4 w-4" />
-          添加交易
-        </Button>
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv"
+            className="hidden"
+            onChange={handleImport}
+          />
+          <Button
+            variant="outline"
+            onClick={handleExport}
+            disabled={exporting}
+          >
+            {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            导出 CSV
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+          >
+            {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            导入 CSV
+          </Button>
+          <Button onClick={openAddDialog}>
+            <Plus className="h-4 w-4" />
+            添加交易
+          </Button>
+        </div>
       </div>
 
       {/* Filters Toolbar */}
@@ -311,45 +401,12 @@ export default function TransactionsPage() {
         <CardContent className="p-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div>
-              <Label className="text-xs text-muted-foreground mb-1.5 block">
-                开始日期
-              </Label>
-              <Input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => {
-                  setDateFrom(e.target.value);
-                  setPage(1);
-                }}
-              />
-            </div>
-            <div>
-              <Label className="text-xs text-muted-foreground mb-1.5 block">
-                结束日期
-              </Label>
-              <Input
-                type="date"
-                value={dateTo}
-                onChange={(e) => {
-                  setDateTo(e.target.value);
-                  setPage(1);
-                }}
-              />
-            </div>
-            <div>
-              <Label className="text-xs text-muted-foreground mb-1.5 block">
-                类型
-              </Label>
+              <Label className="text-xs text-muted-foreground mb-1.5 block">类型</Label>
               <Select
                 value={filterType}
-                onValueChange={(v) => {
-                  setFilterType(v);
-                  setPage(1);
-                }}
+                onValueChange={(v) => { setFilterType(v); setPage(1); }}
               >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">全部</SelectItem>
                   <SelectItem value="income">收入</SelectItem>
@@ -358,19 +415,16 @@ export default function TransactionsPage() {
               </Select>
             </div>
             <div>
-              <Label className="text-xs text-muted-foreground mb-1.5 block">
-                分类
-              </Label>
+              <Label className="text-xs text-muted-foreground mb-1.5 block">分类</Label>
               <Select
                 value={filterCategoryId}
                 onValueChange={(v) => {
                   setFilterCategoryId(v);
+                  setFilterSubcategoryId('all');
                   setPage(1);
                 }}
               >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">全部分类</SelectItem>
                   {categories.map((cat) => (
@@ -382,37 +436,11 @@ export default function TransactionsPage() {
               </Select>
             </div>
             <div>
-              <Label className="text-xs text-muted-foreground mb-1.5 block">
-                人员
-              </Label>
-              <Select
-                value={filterMember}
-                onValueChange={(v) => {
-                  setFilterMember(v);
-                  setPage(1);
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">全部人员</SelectItem>
-                  {allMembers.map((m) => (
-                    <SelectItem key={m.id} value={m.name}>
-                      {m.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs text-muted-foreground mb-1.5 block">
-                搜索
-              </Label>
+              <Label className="text-xs text-muted-foreground mb-1.5 block">搜索</Label>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="分类、地点、备注、人员..."
+                  placeholder="地点、备注、人员..."
                   value={searchInput}
                   onChange={(e) => {
                     const val = e.target.value;
@@ -428,6 +456,93 @@ export default function TransactionsPage() {
               </div>
             </div>
           </div>
+
+          {/* Advanced filters toggle */}
+          <button
+            type="button"
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-3 cursor-pointer transition-colors"
+            onClick={() => setShowAdvanced(!showAdvanced)}
+          >
+            {showAdvanced ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            高级筛选
+          </button>
+
+          {showAdvanced && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3 pt-3 border-t border-border/50">
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">开始日期</Label>
+                <Input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">结束日期</Label>
+                <Input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+                />
+              </div>
+              {filterSubcategories.length > 0 && (
+                <div>
+                  <Label className="text-xs text-muted-foreground mb-1.5 block">子分类</Label>
+                  <Select
+                    value={filterSubcategoryId}
+                    onValueChange={(v) => { setFilterSubcategoryId(v); setPage(1); }}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">全部子分类</SelectItem>
+                      {filterSubcategories.map((sub) => (
+                        <SelectItem key={sub.id} value={sub.id}>
+                          {sub.icon} {sub.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">人员</Label>
+                <Select
+                  value={filterMember}
+                  onValueChange={(v) => { setFilterMember(v); setPage(1); }}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">全部人员</SelectItem>
+                    {allMembers.map((m) => (
+                      <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">最小金额</Label>
+                <Input
+                  type="number"
+                  placeholder="不限"
+                  value={minAmount}
+                  onChange={(e) => { setMinAmount(e.target.value); setPage(1); }}
+                  min="0"
+                  step="0.01"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">最大金额</Label>
+                <Input
+                  type="number"
+                  placeholder="不限"
+                  value={maxAmount}
+                  onChange={(e) => { setMaxAmount(e.target.value); setPage(1); }}
+                  min="0"
+                  step="0.01"
+                />
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
