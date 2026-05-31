@@ -93,7 +93,7 @@ cmd_docker() {
     # Verify backend is responding
     BACKEND_READY=false
     for i in $(seq 1 20); do
-        if curl -sf http://localhost/api/categories >/dev/null 2>&1; then
+        if curl -sf http://localhost/api/health >/dev/null 2>&1; then
             BACKEND_READY=true
             break
         fi
@@ -103,9 +103,10 @@ cmd_docker() {
     if [ "$BACKEND_READY" = true ]; then
         ok "后端就绪"
     else
-        BACKEND_STATUS=$(docker inspect --format='{{.State.Status}}' penycounts-backend-1 2>/dev/null || echo "missing")
+        BACKEND_STATUS="$(docker inspect --format='{{.State.Status}}' penycounts-backend-1 2>/dev/null || true)"
+        BACKEND_STATUS="${BACKEND_STATUS:-missing}"
         if [ "$BACKEND_STATUS" != "running" ]; then
-            err "后端容器未正常运行（状态: $BACKEND_STATUS）"
+            err "后端容器未正常运行 (状态: ${BACKEND_STATUS})"
             echo ""
             warn "后端日志："
             docker logs penycounts-backend-1 --tail=15 2>/dev/null
