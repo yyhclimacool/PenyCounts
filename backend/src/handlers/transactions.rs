@@ -129,7 +129,7 @@ pub async fn update_transaction(
         "update_transaction: received request"
     );
     let txn =
-        services::transaction::update_transaction(&state.pool, auth.family_id, id, req).await?;
+        services::transaction::update_transaction(&state.pool, auth.user_id, auth.family_id, id, req).await?;
     tracing::info!(txn_id = %txn.id, amount = %txn.amount, "update_transaction: updated successfully");
     Ok(Json(txn))
 }

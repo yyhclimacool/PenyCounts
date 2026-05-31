@@ -63,6 +63,7 @@ pub async fn get_category(
 
 pub async fn create_category(
     pool: &PgPool,
+    user_id: Uuid,
     family_id: Uuid,
     req: CreateCategoryRequest,
 ) -> Result<Category, AppError> {
@@ -82,10 +83,11 @@ pub async fn create_category(
 
     let category = sqlx::query_as::<_, Category>(
         "INSERT INTO categories (id, user_id, family_id, name, type, icon, sort_order)
-         VALUES ($1, $1, $2, $3, $4, $5, $6)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING *",
     )
     .bind(Uuid::new_v4())
+    .bind(user_id)
     .bind(family_id)
     .bind(&req.name)
     .bind(&req.r#type)
@@ -187,6 +189,7 @@ pub async fn get_subcategories(
 
 pub async fn create_subcategory(
     pool: &PgPool,
+    user_id: Uuid,
     family_id: Uuid,
     category_id: Uuid,
     req: CreateSubcategoryRequest,
@@ -207,11 +210,12 @@ pub async fn create_subcategory(
 
     let sub = sqlx::query_as::<_, Subcategory>(
         "INSERT INTO subcategories (id, category_id, user_id, family_id, name, icon, sort_order)
-         VALUES ($1, $2, $1, $3, $4, $5, $6)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING *",
     )
     .bind(Uuid::new_v4())
     .bind(category_id)
+    .bind(user_id)
     .bind(family_id)
     .bind(&req.name)
     .bind(&req.icon)

@@ -62,10 +62,11 @@ pub async fn create_transaction(
 
                 sqlx::query(
                     "INSERT INTO members (id, user_id, family_id, name)
-                     VALUES ($1, $1, $2, $3)
+                     VALUES ($1, $2, $3, $4)
                      ON CONFLICT (family_id, name) DO NOTHING",
                 )
                 .bind(Uuid::new_v4())
+                .bind(user_id)
                 .bind(family_id)
                 .bind(member_name)
                 .execute(&mut *tx)
@@ -186,6 +187,7 @@ pub async fn list_transactions(
 
 pub async fn update_transaction(
     pool: &PgPool,
+    user_id: Uuid,
     family_id: Uuid,
     txn_id: Uuid,
     req: CreateTransactionRequest,
@@ -246,10 +248,11 @@ pub async fn update_transaction(
 
                 sqlx::query(
                     "INSERT INTO members (id, user_id, family_id, name)
-                     VALUES ($1, $1, $2, $3)
+                     VALUES ($1, $2, $3, $4)
                      ON CONFLICT (family_id, name) DO NOTHING",
                 )
                 .bind(Uuid::new_v4())
+                .bind(user_id)
                 .bind(family_id)
                 .bind(member_name)
                 .execute(&mut *tx)
@@ -764,10 +767,11 @@ pub async fn import_csv(
 
                 sqlx::query(
                     "INSERT INTO members (id, user_id, family_id, name)
-                     VALUES ($1, $1, $2, $3)
+                     VALUES ($1, $2, $3, $4)
                      ON CONFLICT (family_id, name) DO NOTHING",
                 )
                 .bind(Uuid::new_v4())
+                .bind(user_id)
                 .bind(family_id)
                 .bind(member_name)
                 .execute(&mut *tx)

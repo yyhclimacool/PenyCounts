@@ -134,6 +134,10 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
             axum::routing::get(stats::category_breakdown),
         )
         .route(
+            "/api/stats/subcategory-breakdown",
+            axum::routing::get(stats::subcategory_breakdown),
+        )
+        .route(
             "/api/stats/member-breakdown",
             axum::routing::get(stats::member_breakdown),
         )
@@ -144,6 +148,10 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
         .route(
             "/api/stats/daily-trend",
             axum::routing::get(stats::daily_trend),
+        )
+        .route(
+            "/api/stats/daily-heatmap",
+            axum::routing::get(stats::daily_heatmap),
         )
         .route(
             "/api/stats/yearly-trend",

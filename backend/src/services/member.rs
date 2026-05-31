@@ -32,6 +32,7 @@ pub async fn get_member(
 
 pub async fn create_member(
     pool: &PgPool,
+    user_id: Uuid,
     family_id: Uuid,
     req: CreateMemberRequest,
 ) -> Result<Member, AppError> {
@@ -42,9 +43,10 @@ pub async fn create_member(
     }
 
     let member = sqlx::query_as::<_, Member>(
-        "INSERT INTO members (id, user_id, family_id, name) VALUES ($1, $1, $2, $3) RETURNING *",
+        "INSERT INTO members (id, user_id, family_id, name) VALUES ($1, $2, $3, $4) RETURNING *",
     )
     .bind(Uuid::new_v4())
+    .bind(user_id)
     .bind(family_id)
     .bind(&req.name)
     .fetch_one(pool)

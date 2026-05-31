@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { Loader2, ReceiptText, MapPin } from 'lucide-react';
 
 import {
@@ -9,7 +9,8 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import * as transactionsService from '@/services/transactions';
-import type { Transaction } from '@/types';
+import * as categoriesService from '@/services/categories';
+import type { Transaction, Category } from '@/types';
 import { formatCurrency, formatDate } from '@/utils/format';
 import { cn } from '@/utils/cn';
 
@@ -33,23 +34,27 @@ export function TransactionListDialog({
   type,
 }: TransactionListDialogProps) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setLoading(true);
-    transactionsService
-      .list({
+    Promise.all([
+      transactionsService.list({
         ...(startDate && { start_date: startDate }),
         ...(endDate && { end_date: endDate }),
         ...(categoryId && { category_id: categoryId }),
         ...(type && { type }),
         per_page: 100,
-      })
-      .then((res) => {
+      }),
+      categoriesService.getAll(),
+    ])
+      .then(([res, cats]) => {
         setTransactions(res.data);
         setTotal(res.total);
+        setCategories(cats);
       })
       .catch(() => {
         setTransactions([]);
@@ -57,6 +62,18 @@ export function TransactionListDialog({
       })
       .finally(() => setLoading(false));
   }, [open, startDate, endDate, categoryId, type]);
+
+  const enrichedTransactions = useMemo(() => {
+    const catMap = new Map(categories.map((c) => [c.id, c]));
+    const subMap = new Map(
+      categories.flatMap((c) => (c.subcategories ?? []).map((s) => [s.id, s])),
+    );
+    return transactions.map((tx) => ({
+      ...tx,
+      category: catMap.get(tx.category_id),
+      subcategory: tx.subcategory_id ? subMap.get(tx.subcategory_id) : undefined,
+    }));
+  }, [transactions, categories]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -75,14 +92,14 @@ export function TransactionListDialog({
             <div className="flex items-center justify-center py-12">
               <Loader2 className="size-6 animate-spin text-primary" />
             </div>
-          ) : transactions.length === 0 ? (
+          ) : enrichedTransactions.length === 0 ? (
             <div className="flex flex-col items-center py-12 text-muted-foreground">
               <ReceiptText className="size-10 mb-2 opacity-40" />
               <p className="text-sm">暂无交易记录</p>
             </div>
           ) : (
             <div className="flex flex-col gap-0.5">
-              {transactions.map((tx) => (
+              {enrichedTransactions.map((tx) => (
                 <div
                   key={tx.id}
                   className="flex items-center gap-3 py-2.5 px-2 rounded-lg hover:bg-muted/50 transition-colors"

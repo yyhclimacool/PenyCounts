@@ -129,6 +129,20 @@ export interface CategoryBreakdown {
   percentage: number;
 }
 
+export interface SubcategoryBreakdown {
+  category_id: string;
+  category_name: string;
+  subcategory_id: string | null;
+  subcategory_name: string | null;
+  total: string;
+}
+
+export interface DailyHeatmap {
+  date: string;
+  income: string;
+  expense: string;
+}
+
 export interface MemberBreakdown {
   member_name: string;
   total: string;

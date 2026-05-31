@@ -366,6 +366,15 @@ pub struct CategoryBreakdown {
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct SubcategoryBreakdown {
+    pub category_id: Uuid,
+    pub category_name: String,
+    pub subcategory_id: Option<Uuid>,
+    pub subcategory_name: Option<String>,
+    pub total: Decimal,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct MemberBreakdown {
     pub member_name: String,
     pub total: Decimal,
@@ -382,6 +391,13 @@ pub struct SocialSummary {
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct DailyTrendItem {
     pub day: i32,
+    pub income: Decimal,
+    pub expense: Decimal,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct DailyHeatmapItem {
+    pub date: chrono::NaiveDate,
     pub income: Decimal,
     pub expense: Decimal,
 }

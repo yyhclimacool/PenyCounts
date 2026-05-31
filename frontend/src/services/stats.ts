@@ -1,9 +1,11 @@
 import type {
   CategoryBreakdown,
+  DailyHeatmap,
   DailyTrend,
   MemberBreakdown,
   MonthlyTrend,
   SocialSummary,
+  SubcategoryBreakdown,
   Transaction,
   YearlyTrend,
 } from '@/types';
@@ -56,6 +58,13 @@ export async function categoryBreakdown(
   return data;
 }
 
+export async function subcategoryBreakdown(
+  params?: CategoryBreakdownParams,
+): Promise<SubcategoryBreakdown[]> {
+  const { data } = await api.get<SubcategoryBreakdown[]>('/stats/subcategory-breakdown', { params });
+  return data;
+}
+
 export async function memberBreakdown(params?: MemberBreakdownParams): Promise<MemberBreakdown[]> {
   const { data } = await api.get<MemberBreakdown[]>('/stats/member-breakdown', { params });
   return data;
@@ -63,6 +72,11 @@ export async function memberBreakdown(params?: MemberBreakdownParams): Promise<M
 
 export async function socialSummary(params?: SocialSummaryParams): Promise<SocialSummary[]> {
   const { data } = await api.get<SocialSummary[]>('/stats/social-summary', { params });
+  return data;
+}
+
+export async function dailyHeatmap(params: MonthlyTrendParams): Promise<DailyHeatmap[]> {
+  const { data } = await api.get<DailyHeatmap[]>('/stats/daily-heatmap', { params });
   return data;
 }
 

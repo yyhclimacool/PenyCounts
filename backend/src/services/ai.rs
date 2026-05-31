@@ -31,6 +31,7 @@ pub async fn get_llm_configs(pool: &PgPool, family_id: Uuid) -> Result<Vec<LlmCo
 
 pub async fn create_llm_config(
     pool: &PgPool,
+    user_id: Uuid,
     family_id: Uuid,
     req: LlmConfigRequest,
 ) -> Result<LlmConfig, AppError> {
@@ -43,10 +44,11 @@ pub async fn create_llm_config(
     tracing::debug!("svc::create_llm_config: inserting new config");
     let config = sqlx::query_as::<_, LlmConfig>(
         "INSERT INTO llm_configs (id, user_id, family_id, provider, api_url, api_key, model_name, is_active)
-         VALUES ($1, $1, $2, $3, $4, $5, $6, true)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, true)
          RETURNING *",
     )
     .bind(Uuid::new_v4())
+    .bind(user_id)
     .bind(family_id)
     .bind(&req.provider)
     .bind(&req.api_url)
@@ -826,7 +828,7 @@ pub async fn chat_stream(
                         }
                     }
                     "update_transaction" => {
-                        match execute_update_transaction(&pool_clone, family_id, tc_args).await {
+                        match execute_update_transaction(&pool_clone, user_id, family_id, tc_args).await {
                             Ok(summary) => {
                                 full_response.push_str(&summary);
                                 let result_json = serde_json::json!({ "success": true, "summary": summary });
@@ -851,7 +853,7 @@ pub async fn chat_stream(
                         }
                     }
                     "create_social_gift" => {
-                        match execute_create_social_gift(&pool_clone, family_id, tc_args).await {
+                        match execute_create_social_gift(&pool_clone, user_id, family_id, tc_args).await {
                             Ok(summary) => {
                                 full_response.push_str(&summary);
                                 let result_json = serde_json::json!({ "success": true, "summary": summary });
@@ -1166,6 +1168,7 @@ async fn execute_delete_transaction(
 
 async fn execute_update_transaction(
     pool: &PgPool,
+    user_id: Uuid,
     family_id: Uuid,
     args_json: &str,
 ) -> Result<String, String> {
@@ -1256,7 +1259,7 @@ async fn execute_update_transaction(
         members: None,
     };
 
-    let _ = transaction::update_transaction(pool, family_id, txn_id, req)
+    let _ = transaction::update_transaction(pool, user_id, family_id, txn_id, req)
         .await
         .map_err(|e| format!("更新交易失败: {}", e))?;
 
@@ -1358,6 +1361,7 @@ async fn execute_get_statistics(
 
 async fn execute_create_social_gift(
     pool: &PgPool,
+    user_id: Uuid,
     family_id: Uuid,
     args_json: &str,
 ) -> Result<String, String> {
@@ -1401,7 +1405,7 @@ async fn execute_create_social_gift(
         note,
     };
 
-    social_gift::create_social_gift(pool, family_id, req)
+    social_gift::create_social_gift(pool, user_id, family_id, req)
         .await
         .map_err(|e| format!("记录人情往来失败: {}", e))?;
 

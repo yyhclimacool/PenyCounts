@@ -7,6 +7,7 @@ use crate::models::{CreateSocialGiftRequest, PaginatedResponse, SocialGift, Soci
 
 pub async fn create_social_gift(
     pool: &PgPool,
+    user_id: Uuid,
     family_id: Uuid,
     req: CreateSocialGiftRequest,
 ) -> Result<SocialGift, AppError> {
@@ -18,10 +19,11 @@ pub async fn create_social_gift(
 
     let gift = sqlx::query_as::<_, SocialGift>(
         "INSERT INTO social_gifts (id, user_id, family_id, type, person_name, relation, occasion, amount, currency, date, note, created_at)
-         VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING *",
     )
     .bind(Uuid::new_v4())
+    .bind(user_id)
     .bind(family_id)
     .bind(&req.r#type)
     .bind(&req.person_name)

@@ -39,6 +39,7 @@ import type {
   CategoryBreakdown,
   MemberBreakdown,
   SocialSummary,
+  SubcategoryBreakdown,
   DailyTrend,
   YearlyTrend,
 } from '@/types';
@@ -308,7 +309,9 @@ function OverviewTab() {
 
   const monthlyBarOption = useMemo((): echarts.EChartsCoreOption => {
     const series: any[] = [];
+    const legendData: string[] = [];
     if (showIncome) {
+      legendData.push('收入');
       series.push({
         name: '收入',
         type: 'bar',
@@ -318,6 +321,7 @@ function OverviewTab() {
       });
     }
     if (showExpense) {
+      legendData.push('支出');
       series.push({
         name: '支出',
         type: 'bar',
@@ -326,24 +330,63 @@ function OverviewTab() {
         barGap: '20%',
       });
     }
+    if (showIncome && showExpense) {
+      legendData.push('结余');
+      series.push({
+        name: '结余',
+        type: 'line',
+        yAxisIndex: 1,
+        data: monthlyChartData.map((d) => d.income - d.expense),
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 6,
+        lineStyle: { width: 2 },
+        itemStyle: { color: '#0062FF' },
+      });
+    }
     return {
-      tooltip: { trigger: 'axis', ...TOOLTIP_STYLE, formatter: tooltipFormatter },
-      legend: { bottom: 0, textStyle: { fontSize: 12 } },
-      grid: { left: 60, right: 16, top: 16, bottom: 36 },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'cross', crossStyle: { color: '#999' } },
+        ...TOOLTIP_STYLE,
+        formatter: tooltipFormatter,
+      },
+      toolbox: {
+        feature: {
+          dataView: { show: true, readOnly: false },
+          magicType: { show: true, type: ['line', 'bar'] },
+          restore: { show: true },
+          saveAsImage: { show: true },
+        },
+      },
+      legend: { data: legendData, bottom: 0, textStyle: { fontSize: 12 } },
+      grid: { left: 60, right: 60, top: 40, bottom: 36 },
       xAxis: {
         type: 'category',
         data: MONTHS.map((m) => `${m}月`),
+        axisPointer: { type: 'shadow' },
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: { fontSize: 12 },
       },
-      yAxis: {
-        type: 'value',
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { fontSize: 12, formatter: formatYAxis },
-        splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
-      },
+      yAxis: [
+        {
+          type: 'value',
+          name: '金额',
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { fontSize: 12, formatter: formatYAxis },
+          splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
+        },
+        {
+          type: 'value',
+          name: '结余',
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { fontSize: 12, formatter: formatYAxis },
+          splitLine: { show: false },
+        },
+      ],
       series,
     };
   }, [monthlyChartData, showIncome, showExpense]);
@@ -656,21 +699,26 @@ function CategoryBreakdownTab() {
   const [month, setMonth] = useState('all');
   const [type, setType] = useState<'expense' | 'income'>('expense');
   const [data, setData] = useState<CategoryBreakdown[]>([]);
+  const [subData, setSubData] = useState<SubcategoryBreakdown[]>([]);
   const [loading, setLoading] = useState(true);
   const transactionsRev = useDataStore((s) => s.transactionsRev);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    statsService
-      .categoryBreakdown({
-        year,
-        type,
-        ...(month !== 'all' && { month: Number(month) }),
+    const params = { year, type, ...(month !== 'all' && { month: Number(month) }) };
+    Promise.all([
+      statsService.categoryBreakdown(params),
+      statsService.subcategoryBreakdown(params),
+    ])
+      .then(([catData, subcatData]) => {
+        if (!cancelled) {
+          setData(catData);
+          setSubData(subcatData);
+        }
       })
-      .then((d) => !cancelled && setData(d))
-      .catch(() => !cancelled && setData([]))
-      .finally(() => !cancelled && setLoading(false));
+      .catch(() => { if (!cancelled) { setData([]); setSubData([]); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [year, month, type, transactionsRev]);
 
@@ -773,6 +821,89 @@ function CategoryBreakdownTab() {
     ],
   }), [barData]);
 
+  const sankeyOption = useMemo((): echarts.EChartsCoreOption => {
+    const typeLabel = type === 'expense' ? '总支出' : '总收入';
+    const grandTotal = sorted.reduce((s, d) => s + (parseFloat(d.total) || 0), 0);
+    if (grandTotal === 0) return {};
+
+    const nodes: { name: string }[] = [{ name: typeLabel }];
+    const links: { source: string; target: string; value: number }[] = [];
+    const catTotals = new Map<string, number>();
+
+    for (const row of subData) {
+      const val = parseFloat(row.total) || 0;
+      if (val <= 0) continue;
+      catTotals.set(row.category_name, (catTotals.get(row.category_name) || 0) + val);
+    }
+
+    for (const [catName] of catTotals) {
+      nodes.push({ name: catName });
+      links.push({ source: typeLabel, target: catName, value: catTotals.get(catName)! });
+    }
+
+    for (const row of subData) {
+      const val = parseFloat(row.total) || 0;
+      if (val <= 0 || !row.subcategory_name) continue;
+      const subName = `${row.subcategory_name}`;
+      const uniqueName = nodes.find((n) => n.name === subName)
+        ? subName
+        : subName;
+      if (!nodes.find((n) => n.name === uniqueName)) {
+        nodes.push({ name: uniqueName });
+      }
+      links.push({ source: row.category_name, target: uniqueName, value: val });
+    }
+
+    for (const row of subData) {
+      const val = parseFloat(row.total) || 0;
+      if (val <= 0 || row.subcategory_name) continue;
+      const uncat = `${row.category_name}-未细分`;
+      if (!nodes.find((n) => n.name === uncat)) {
+        nodes.push({ name: uncat });
+      }
+      links.push({ source: row.category_name, target: uncat, value: val });
+    }
+
+    return {
+      tooltip: {
+        trigger: 'item',
+        triggerOn: 'mousemove',
+        formatter: (params: any) => {
+          if (params.dataType === 'edge') {
+            return `${params.data.source} → ${params.data.target}<br/>金额: ${formatCurrency(params.data.value, 'CNY')}`;
+          }
+          return `${params.name}<br/>金额: ${formatCurrency(params.value, 'CNY')}`;
+        },
+      },
+      series: [
+        {
+          type: 'sankey',
+          data: nodes,
+          links,
+          emphasis: { focus: 'adjacency' },
+          levels: [
+            {
+              depth: 0,
+              itemStyle: { color: type === 'expense' ? EXPENSE_COLOR : INCOME_COLOR },
+              lineStyle: { color: 'source', opacity: 0.4 },
+            },
+            {
+              depth: 1,
+              lineStyle: { color: 'source', opacity: 0.3 },
+            },
+            {
+              depth: 2,
+              lineStyle: { color: 'source', opacity: 0.2 },
+            },
+          ],
+          lineStyle: { curveness: 0.5 },
+          label: { fontSize: 12 },
+          nodeGap: 12,
+        },
+      ],
+    };
+  }, [sorted, subData, type]);
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -845,6 +976,21 @@ function CategoryBreakdownTab() {
               />
             </CardContent>
           </Card>
+
+          {subData.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">分类流向</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ReactECharts
+                  option={sankeyOption}
+                  style={{ height: Math.max(400, sorted.length * 50) }}
+                  notMerge
+                />
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
 
@@ -1038,7 +1184,9 @@ function SocialGiftsTab() {
 
   const socialBarOption = useMemo((): echarts.EChartsCoreOption => {
     const series: any[] = [];
+    const legendData: string[] = [];
     if (showGiven) {
+      legendData.push('送出');
       series.push({
         name: '送出',
         type: 'bar',
@@ -1047,6 +1195,7 @@ function SocialGiftsTab() {
       });
     }
     if (showReceived) {
+      legendData.push('收到');
       series.push({
         name: '收到',
         type: 'bar',
@@ -1054,13 +1203,41 @@ function SocialGiftsTab() {
         itemStyle: { color: INCOME_COLOR, borderRadius: [4, 4, 0, 0] },
       });
     }
+    if (showGiven && showReceived) {
+      legendData.push('净额');
+      series.push({
+        name: '净额',
+        type: 'line',
+        yAxisIndex: 1,
+        data: chartData.map((d) => d.received - d.given),
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 6,
+        lineStyle: { width: 2 },
+        itemStyle: { color: '#0062FF' },
+      });
+    }
     return {
-      tooltip: { trigger: 'axis', ...TOOLTIP_STYLE, formatter: tooltipFormatter },
-      legend: { bottom: 0, textStyle: { fontSize: 12 } },
-      grid: { left: 60, right: 16, top: 16, bottom: 36 },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'cross', crossStyle: { color: '#999' } },
+        ...TOOLTIP_STYLE,
+        formatter: tooltipFormatter,
+      },
+      toolbox: {
+        feature: {
+          dataView: { show: true, readOnly: false },
+          magicType: { show: true, type: ['line', 'bar'] },
+          restore: { show: true },
+          saveAsImage: { show: true },
+        },
+      },
+      legend: { data: legendData, bottom: 0, textStyle: { fontSize: 12 } },
+      grid: { left: 60, right: 60, top: 40, bottom: 36 },
       xAxis: {
         type: 'category',
         data: chartData.map((d) => d.name),
+        axisPointer: { type: 'shadow' },
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: {
@@ -1069,13 +1246,24 @@ function SocialGiftsTab() {
           rotate: chartData.length > 6 ? 35 : 0,
         },
       },
-      yAxis: {
-        type: 'value',
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { fontSize: 11, formatter: formatYAxis },
-        splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
-      },
+      yAxis: [
+        {
+          type: 'value',
+          name: '金额',
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { fontSize: 11, formatter: formatYAxis },
+          splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
+        },
+        {
+          type: 'value',
+          name: '净额',
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { fontSize: 11, formatter: formatYAxis },
+          splitLine: { show: false },
+        },
+      ],
       series,
     };
   }, [chartData, showGiven, showReceived]);

@@ -38,7 +38,7 @@ pub async fn create_member(
     Json(req): Json<CreateMemberRequest>,
 ) -> Result<(StatusCode, Json<Member>), AppError> {
     tracing::debug!(user_id = %auth.user_id, ?req, "create_member: received request");
-    let member = services::member::create_member(&state.pool, auth.family_id, req).await?;
+    let member = services::member::create_member(&state.pool, auth.user_id, auth.family_id, req).await?;
     tracing::info!(member_id = %member.id, name = %member.name, "create_member: created successfully");
     Ok((StatusCode::CREATED, Json(member)))
 }

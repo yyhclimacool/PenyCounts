@@ -7,9 +7,9 @@ use crate::config::AppState;
 use crate::errors::AppError;
 use crate::middleware::AuthUser;
 use crate::models::{
-    CategoryBreakdown, DailyTrendItem, MemberBreakdown, MonthlyTrendItem, SocialSummary,
-    StatsBreakdownQuery, StatsMemberQuery, StatsYearMonthQuery, StatsYearQuery, Transaction,
-    YearlyTrendItem,
+    CategoryBreakdown, DailyHeatmapItem, DailyTrendItem, MemberBreakdown, MonthlyTrendItem,
+    SocialSummary, StatsBreakdownQuery, StatsMemberQuery, StatsYearMonthQuery, StatsYearQuery,
+    SubcategoryBreakdown, Transaction, YearlyTrendItem,
 };
 use crate::services;
 
@@ -66,6 +66,22 @@ pub async fn category_breakdown(
     Ok(Json(data))
 }
 
+pub async fn subcategory_breakdown(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(query): Query<StatsBreakdownQuery>,
+) -> Result<Json<Vec<SubcategoryBreakdown>>, AppError> {
+    let data = services::stats::subcategory_breakdown(
+        &state.pool,
+        auth.family_id,
+        query.year,
+        query.month,
+        query.r#type.as_deref(),
+    )
+    .await?;
+    Ok(Json(data))
+}
+
 pub async fn member_breakdown(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -116,6 +132,15 @@ pub async fn daily_trend(
     )
     .await?;
     tracing::debug!(user_id = %auth.family_id, rows = data.len(), "daily_trend: returning data");
+    Ok(Json(data))
+}
+
+pub async fn daily_heatmap(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(query): Query<StatsYearQuery>,
+) -> Result<Json<Vec<DailyHeatmapItem>>, AppError> {
+    let data = services::stats::daily_heatmap(&state.pool, auth.family_id, query.year).await?;
     Ok(Json(data))
 }
 

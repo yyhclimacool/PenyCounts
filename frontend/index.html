@@ -13,10 +13,13 @@
     <div id="root"></div>
     <script>
       (function(){
-        var t = localStorage.getItem('theme');
-        if (t === 'dark' || (!t && matchMedia('(prefers-color-scheme:dark)').matches)) {
-          document.documentElement.classList.add('dark');
+        function apply() {
+          var t = localStorage.getItem('theme');
+          var dark = t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme:dark)').matches);
+          document.documentElement.classList.toggle('dark', dark);
         }
+        apply();
+        matchMedia('(prefers-color-scheme:dark)').addEventListener('change', apply);
       })();
     </script>
     <script type="module" src="/src/main.tsx"></script>

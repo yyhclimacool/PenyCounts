@@ -110,6 +110,40 @@ pub async fn category_breakdown(
     Ok(rows)
 }
 
+pub async fn subcategory_breakdown(
+    pool: &PgPool,
+    family_id: Uuid,
+    year: i32,
+    month: Option<u32>,
+    txn_type: Option<&str>,
+) -> Result<Vec<crate::models::SubcategoryBreakdown>, AppError> {
+    let effective_type = txn_type.unwrap_or("expense");
+    let rows = sqlx::query_as::<_, crate::models::SubcategoryBreakdown>(
+        "SELECT
+             c.id    AS category_id,
+             c.name  AS category_name,
+             s.id    AS subcategory_id,
+             s.name  AS subcategory_name,
+             COALESCE(SUM(t.amount), 0) AS total
+         FROM transactions t
+         JOIN categories c ON t.category_id = c.id
+         LEFT JOIN subcategories s ON t.subcategory_id = s.id
+         WHERE t.family_id = $1
+           AND EXTRACT(YEAR FROM t.date)::int4 = $2
+           AND ($3::int4 IS NULL OR EXTRACT(MONTH FROM t.date)::int4 = $3)
+           AND t.type = $4
+         GROUP BY c.id, c.name, s.id, s.name
+         ORDER BY total DESC",
+    )
+    .bind(family_id)
+    .bind(year)
+    .bind(month.map(|m| m as i32))
+    .bind(effective_type)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn member_breakdown(
     pool: &PgPool,
     family_id: Uuid,
@@ -208,6 +242,29 @@ pub async fn daily_trend(
     .await?;
     tracing::debug!(rows = rows.len(), "svc::daily_trend: done");
 
+    Ok(rows)
+}
+
+pub async fn daily_heatmap(
+    pool: &PgPool,
+    family_id: Uuid,
+    year: i32,
+) -> Result<Vec<crate::models::DailyHeatmapItem>, AppError> {
+    let rows = sqlx::query_as::<_, crate::models::DailyHeatmapItem>(
+        "SELECT
+             date,
+             COALESCE(SUM(CASE WHEN type = 'income'  THEN amount ELSE 0 END), 0) AS income,
+             COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense
+         FROM transactions
+         WHERE family_id = $1
+           AND EXTRACT(YEAR FROM date)::int4 = $2
+         GROUP BY date
+         ORDER BY date",
+    )
+    .bind(family_id)
+    .bind(year)
+    .fetch_all(pool)
+    .await?;
     Ok(rows)
 }
 

@@ -46,7 +46,7 @@ pub async fn upsert_config(
         services::ai::update_llm_config(&state.pool, auth.family_id, existing.id, req).await?
     } else {
         tracing::debug!("upsert_config: no active config found, creating new one");
-        services::ai::create_llm_config(&state.pool, auth.family_id, req).await?
+        services::ai::create_llm_config(&state.pool, auth.user_id, auth.family_id, req).await?
     };
     tracing::info!(config_id = %config.id, model = %config.model_name, "upsert_config: config saved");
     Ok(Json(config))
@@ -58,7 +58,7 @@ pub async fn create_config(
     Json(req): Json<LlmConfigRequest>,
 ) -> Result<(StatusCode, Json<LlmConfig>), AppError> {
     tracing::debug!(user_id = %auth.family_id, ?req, "create_config: received request");
-    let config = services::ai::create_llm_config(&state.pool, auth.family_id, req).await?;
+    let config = services::ai::create_llm_config(&state.pool, auth.user_id, auth.family_id, req).await?;
     tracing::info!(config_id = %config.id, model = %config.model_name, "create_config: created successfully");
     Ok((StatusCode::CREATED, Json(config)))
 }

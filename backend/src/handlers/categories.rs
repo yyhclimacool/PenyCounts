@@ -39,7 +39,7 @@ pub async fn create_category(
 ) -> Result<(StatusCode, Json<Category>), AppError> {
     tracing::debug!(user_id = %auth.family_id, ?req, "create_category: received request");
     let category =
-        services::category::create_category(&state.pool, auth.family_id, req).await?;
+        services::category::create_category(&state.pool, auth.user_id, auth.family_id, req).await?;
     tracing::info!(category_id = %category.id, name = %category.name, "create_category: created successfully");
     Ok((StatusCode::CREATED, Json(category)))
 }
@@ -90,7 +90,7 @@ pub async fn create_subcategory(
 ) -> Result<(StatusCode, Json<Subcategory>), AppError> {
     tracing::debug!(user_id = %auth.family_id, category_id = %category_id, ?req, "create_subcategory: received request");
     let sub =
-        services::category::create_subcategory(&state.pool, auth.family_id, category_id, req)
+        services::category::create_subcategory(&state.pool, auth.user_id, auth.family_id, category_id, req)
             .await?;
     tracing::info!(sub_id = %sub.id, name = %sub.name, "create_subcategory: created successfully");
     Ok((StatusCode::CREATED, Json(sub)))
