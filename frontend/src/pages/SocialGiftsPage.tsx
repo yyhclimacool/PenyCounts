@@ -46,6 +46,7 @@ import type { SocialGift, SocialSummary } from '@/types';
 import { formatCurrency, formatDate } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import { useToast } from '@/hooks/useToast';
+import { DatePicker } from '@/components/ui/date-picker';
 
 const PER_PAGE = 20;
 
@@ -595,10 +596,9 @@ export default function SocialGiftsPage() {
             {/* Date */}
             <div>
               <Label>日期</Label>
-              <Input
-                type="date"
+              <DatePicker
                 value={form.date}
-                onChange={(e) => updateForm('date', e.target.value)}
+                onChange={(v) => updateForm('date', v)}
                 className="mt-1.5"
               />
             </div>

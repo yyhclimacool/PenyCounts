@@ -19,6 +19,10 @@ import {
   RefreshCw,
   Crown,
   AlertTriangle,
+  Sun,
+  Moon,
+  Monitor,
+  Palette,
 } from 'lucide-react';
 import {
   Card,
@@ -57,6 +61,7 @@ import { updateProfile } from '@/services/auth';
 import type { LlmConfig, Member, Family, FamilyDetail } from '@/types';
 import { cn } from '@/utils/cn';
 import { useToast } from '@/hooks/useToast';
+import { useTheme } from '@/hooks/useTheme';
 
 interface LlmForm {
   provider: string;
@@ -74,6 +79,7 @@ const defaultLlmForm: LlmForm = {
 
 export default function SettingsPage() {
   const { addToast } = useToast();
+  const { theme, setTheme } = useTheme();
   const user = useAuthStore((s) => s.user);
   const setUser = useAuthStore((s) => s.setUser);
   const authLogin = useAuthStore((s) => s.login);
@@ -1219,6 +1225,52 @@ export default function SettingsPage() {
               ))}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Theme */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-primary/10 rounded-xl">
+              <Palette className="size-5 text-primary" />
+            </div>
+            <div>
+              <CardTitle>外观</CardTitle>
+              <CardDescription>选择应用的显示主题</CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="flex rounded-lg border p-0.5">
+            <Button
+              variant={theme === 'light' ? 'default' : 'ghost'}
+              size="sm"
+              className="h-8 flex-1 text-xs"
+              onClick={() => setTheme('light')}
+            >
+              <Sun className="size-3.5" />
+              亮色
+            </Button>
+            <Button
+              variant={theme === 'dark' ? 'default' : 'ghost'}
+              size="sm"
+              className="h-8 flex-1 text-xs"
+              onClick={() => setTheme('dark')}
+            >
+              <Moon className="size-3.5" />
+              暗色
+            </Button>
+            <Button
+              variant={theme === 'system' ? 'default' : 'ghost'}
+              size="sm"
+              className="h-8 flex-1 text-xs"
+              onClick={() => setTheme('system')}
+            >
+              <Monitor className="size-3.5" />
+              跟随系统
+            </Button>
+          </div>
         </CardContent>
       </Card>
 

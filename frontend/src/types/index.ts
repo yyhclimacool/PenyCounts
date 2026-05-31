@@ -122,6 +122,7 @@ export interface MonthlyTrend {
 }
 
 export interface CategoryBreakdown {
+  category_id: string;
   category_name: string;
   icon: string;
   total: string;

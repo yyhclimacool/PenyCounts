@@ -47,6 +47,7 @@ import type { Transaction, Category, Member } from '@/types';
 import { formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import { useToast } from '@/hooks/useToast';
+import { DatePicker } from '@/components/ui/date-picker';
 
 const PER_PAGE = 20;
 
@@ -478,18 +479,18 @@ export default function TransactionsPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3 pt-3 border-t border-border/50">
               <div>
                 <Label className="text-xs text-muted-foreground mb-1.5 block">开始日期</Label>
-                <Input
-                  type="date"
+                <DatePicker
                   value={dateFrom}
-                  onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+                  onChange={(v) => { setDateFrom(v); setPage(1); }}
+                  placeholder="选择日期"
                 />
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground mb-1.5 block">结束日期</Label>
-                <Input
-                  type="date"
+                <DatePicker
                   value={dateTo}
-                  onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+                  onChange={(v) => { setDateTo(v); setPage(1); }}
+                  placeholder="选择日期"
                 />
               </div>
               {filterSubcategories.length > 0 && (
@@ -875,10 +876,9 @@ export default function TransactionsPage() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>日期</Label>
-                <Input
-                  type="date"
+                <DatePicker
                   value={form.date}
-                  onChange={(e) => updateForm('date', e.target.value)}
+                  onChange={(v) => updateForm('date', v)}
                   className="mt-1.5"
                 />
               </div>

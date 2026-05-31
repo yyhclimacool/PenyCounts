@@ -44,6 +44,7 @@ import type {
 } from '@/types';
 import { formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
+import { TransactionListDialog } from '@/components/TransactionListDialog';
 
 
 const INCOME_COLOR = '#10B981';
@@ -222,6 +223,7 @@ function OverviewTab() {
 
   const [yearlyData, setYearlyData] = useState<YearlyTrend[]>([]);
   const [yearlyLoading, setYearlyLoading] = useState(true);
+  const [clickedRange, setClickedRange] = useState<{ start: string; end: string; title: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -354,7 +356,8 @@ function OverviewTab() {
         type: 'line',
         data: dailyChartData.map((d) => d.expense),
         smooth: false,
-        symbol: 'none',
+        symbol: 'emptyCircle',
+        symbolSize: 6,
         lineStyle: { color: EXPENSE_COLOR, width: 2 },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -371,7 +374,8 @@ function OverviewTab() {
         type: 'line',
         data: dailyChartData.map((d) => d.income),
         smooth: false,
-        symbol: 'none',
+        symbol: 'emptyCircle',
+        symbolSize: 6,
         lineStyle: { color: INCOME_COLOR, width: 2 },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -561,6 +565,17 @@ function OverviewTab() {
                   option={dailyAreaOption}
                   style={{ height: 280 }}
                   notMerge
+                  onEvents={{
+                    click: (params: any) => {
+                      const day = dailyChartData[params.dataIndex]?.day;
+                      if (day != null) {
+                        const m = String(selectedMonth).padStart(2, '0');
+                        const d = String(day).padStart(2, '0');
+                        const date = `${year}-${m}-${d}`;
+                        setClickedRange({ start: date, end: date, title: `${selectedMonth}月${day}日 交易记录` });
+                      }
+                    },
+                  }}
                 />
               </CardContent>
             </Card>
@@ -605,11 +620,29 @@ function OverviewTab() {
                 option={yearlyLineOption}
                 style={{ height: 300 }}
                 notMerge
+                onEvents={{
+                  click: (params: any) => {
+                    const y = yearlyChartData[params.dataIndex]?.year;
+                    if (y != null) {
+                      setClickedRange({ start: `${y}-01-01`, end: `${y}-12-31`, title: `${y}年 交易记录` });
+                    }
+                  },
+                }}
               />
             </CardContent>
           </Card>
         )}
       </div>
+
+      {clickedRange && (
+        <TransactionListDialog
+          open={!!clickedRange}
+          onOpenChange={(open) => { if (!open) setClickedRange(null); }}
+          title={clickedRange.title}
+          startDate={clickedRange.start}
+          endDate={clickedRange.end}
+        />
+      )}
     </div>
   );
 }
@@ -641,10 +674,13 @@ function CategoryBreakdownTab() {
     return () => { cancelled = true; };
   }, [year, month, type, transactionsRev]);
 
+  const [clickedCategory, setClickedCategory] = useState<{ id: string; name: string } | null>(null);
+
   const sorted = [...data].sort(
     (a, b) => parseFloat(b.total) - parseFloat(a.total),
   );
   const pieData = sorted.map((d) => ({
+    id: d.category_id,
     name: d.category_name,
     value: parseFloat(d.total) || 0,
     icon: d.icon,
@@ -652,7 +688,9 @@ function CategoryBreakdownTab() {
   }));
 
   const barData = sorted.map((d) => ({
+    id: d.category_id,
     name: `${d.icon} ${d.category_name}`,
+    rawName: d.category_name,
     value: parseFloat(d.total) || 0,
     percentage: d.percentage,
   }));
@@ -778,6 +816,12 @@ function CategoryBreakdownTab() {
                 option={pieOption}
                 style={{ height: 300 }}
                 notMerge
+                onEvents={{
+                  click: (params: any) => {
+                    const item = pieData[params.dataIndex];
+                    if (item) setClickedCategory({ id: item.id, name: item.name });
+                  },
+                }}
               />
             </CardContent>
           </Card>
@@ -791,10 +835,29 @@ function CategoryBreakdownTab() {
                 option={barOption}
                 style={{ height: Math.max(180, barData.length * 44) }}
                 notMerge
+                onEvents={{
+                  click: (params: any) => {
+                    const idx = barData.length - 1 - params.dataIndex;
+                    const item = barData[idx];
+                    if (item) setClickedCategory({ id: item.id, name: item.rawName });
+                  },
+                }}
               />
             </CardContent>
           </Card>
         </>
+      )}
+
+      {clickedCategory && (
+        <TransactionListDialog
+          open={!!clickedCategory}
+          onOpenChange={(open) => { if (!open) setClickedCategory(null); }}
+          title={`${clickedCategory.name} · ${year}年${month !== 'all' ? `${month}月` : ''}`}
+          startDate={month !== 'all' ? `${year}-${String(month).padStart(2, '0')}-01` : `${year}-01-01`}
+          endDate={month !== 'all' ? `${year}-${String(month).padStart(2, '0')}-${daysInMonth(year, Number(month))}` : `${year}-12-31`}
+          categoryId={clickedCategory.id}
+          type={type}
+        />
       )}
     </div>
   );

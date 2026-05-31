@@ -320,11 +320,11 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-64 flex-col bg-sidebar glass transition-transform duration-300 ease-in-out lg:static lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-sidebar-border bg-sidebar transition-transform duration-300 ease-in-out lg:static lg:translate-x-0',
           open ? 'translate-x-0' : '-translate-x-full',
         )}
       >
-        <div className="flex h-14 items-center justify-between border-b border-glass-border px-5">
+        <div className="flex h-14 items-center justify-between border-b border-sidebar-border px-5">
           <NavLink to="/" className="flex items-center gap-2.5 group" onClick={onClose}>
             <div className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80 text-primary-foreground shadow-md shadow-primary/25 transition-transform group-hover:scale-105">
               <Wallet className="size-5" />
@@ -358,7 +358,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                 className={cn(
                   'group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold transition-all duration-200',
                   isActive
-                    ? 'bg-primary/10 text-primary border border-glass-border'
+                    ? 'bg-primary/10 text-primary border border-sidebar-border'
                     : 'text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground',
                 )}
               >
@@ -379,7 +379,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           })}
         </nav>
 
-        <div className="border-t border-glass-border p-3">
+        <div className="border-t border-sidebar-border p-3">
           <button
             type="button"
             onClick={() => setProfileOpen(true)}

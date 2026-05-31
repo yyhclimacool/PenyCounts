@@ -358,6 +358,7 @@ pub struct MonthlyTrendItem {
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct CategoryBreakdown {
+    pub category_id: Uuid,
     pub category_name: String,
     pub icon: String,
     pub total: Decimal,

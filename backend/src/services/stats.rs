@@ -75,6 +75,7 @@ pub async fn category_breakdown(
 
     let mut rows = sqlx::query_as::<_, CategoryBreakdown>(
         "SELECT
+             c.id    AS category_id,
              c.name  AS category_name,
              c.icon  AS icon,
              COALESCE(SUM(t.amount), 0) AS total,
@@ -85,7 +86,7 @@ pub async fn category_breakdown(
            AND EXTRACT(YEAR FROM t.date)::int4 = $2
            AND ($3::int4 IS NULL OR EXTRACT(MONTH FROM t.date)::int4 = $3)
            AND t.type = $4
-         GROUP BY c.name, c.icon
+         GROUP BY c.id, c.name, c.icon
          ORDER BY total DESC",
     )
     .bind(family_id)

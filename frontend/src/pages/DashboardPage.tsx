@@ -30,6 +30,7 @@ import { useDataStore } from '@/stores/dataStore';
 import type { MonthlyTrend, DailyTrend, CategoryBreakdown, Transaction } from '@/types';
 import { formatCurrency, formatDate } from '@/utils/format';
 import { cn } from '@/utils/cn';
+import { TransactionListDialog } from '@/components/TransactionListDialog';
 
 
 const EXPENSE_COLOR = '#EF4444';
@@ -59,6 +60,8 @@ export default function DashboardPage() {
   const [dailyData, setDailyData] = useState<DailyTrend[]>([]);
   const [categoryData, setCategoryData] = useState<CategoryBreakdown[]>([]);
   const [recentTx, setRecentTx] = useState<Transaction[]>([]);
+  const [clickedDate, setClickedDate] = useState<string | null>(null);
+  const [clickedCategory, setClickedCategory] = useState<{ id: string; name: string } | null>(null);
   const transactionsRev = useDataStore((s) => s.transactionsRev);
 
   useEffect(() => {
@@ -107,6 +110,7 @@ export default function DashboardPage() {
     return [...categoryData]
       .sort((a, b) => parseFloat(b.total) - parseFloat(a.total))
       .map((d) => ({
+        id: d.category_id,
         name: d.category_name,
         value: parseFloat(d.total) || 0,
         icon: d.icon,
@@ -151,7 +155,8 @@ export default function DashboardPage() {
         type: 'line',
         data: dailyChartData.map((d) => d.expense),
         smooth: false,
-        symbol: 'none',
+        symbol: 'emptyCircle',
+        symbolSize: 6,
         lineStyle: { color: EXPENSE_COLOR, width: 2 },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -166,7 +171,8 @@ export default function DashboardPage() {
         type: 'line',
         data: dailyChartData.map((d) => d.income),
         smooth: false,
-        symbol: 'none',
+        symbol: 'emptyCircle',
+        symbolSize: 6,
         lineStyle: { color: INCOME_COLOR, width: 2 },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -346,6 +352,15 @@ export default function DashboardPage() {
               option={areaChartOption}
               style={{ height: 240 }}
               notMerge
+              onEvents={{
+                click: (params: any) => {
+                  const day = dailyChartData[params.dataIndex]?.day;
+                  if (day != null) {
+                    const date = dayjs(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`).format('YYYY-MM-DD');
+                    setClickedDate(date);
+                  }
+                },
+              }}
             />
           )}
         </CardContent>
@@ -369,6 +384,12 @@ export default function DashboardPage() {
                 option={pieChartOption}
                 style={{ height: 260 }}
                 notMerge
+                onEvents={{
+                  click: (params: any) => {
+                    const item = pieData[params.dataIndex];
+                    if (item) setClickedCategory({ id: item.id, name: item.name });
+                  },
+                }}
               />
             )}
           </CardContent>
@@ -454,6 +475,28 @@ export default function DashboardPage() {
       >
         <Plus className="!h-6 !w-6" />
       </Button>
+
+      {clickedDate && (
+        <TransactionListDialog
+          open={!!clickedDate}
+          onOpenChange={(open) => { if (!open) setClickedDate(null); }}
+          title={`${dayjs(clickedDate).format('M月D日')} 交易记录`}
+          startDate={clickedDate}
+          endDate={clickedDate}
+        />
+      )}
+
+      {clickedCategory && (
+        <TransactionListDialog
+          open={!!clickedCategory}
+          onOpenChange={(open) => { if (!open) setClickedCategory(null); }}
+          title={`${clickedCategory.name} · ${year}年${month}月`}
+          startDate={`${year}-${String(month).padStart(2, '0')}-01`}
+          endDate={`${year}-${String(month).padStart(2, '0')}-${daysInMonth}`}
+          categoryId={clickedCategory.id}
+          type="expense"
+        />
+      )}
     </div>
   );
 }

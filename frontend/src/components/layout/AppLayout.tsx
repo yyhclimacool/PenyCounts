@@ -47,16 +47,11 @@ export function AppLayout() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-transparent">
-      <div className="fixed inset-0 -z-10 overflow-hidden">
-        <div className="absolute -top-[40%] -right-[20%] h-[80vh] w-[80vh] rounded-full bg-primary/5 blur-[100px]" />
-        <div className="absolute -bottom-[30%] -left-[20%] h-[70vh] w-[70vh] rounded-full bg-accent/8 blur-[100px]" />
-      </div>
-
+    <div className="flex h-screen overflow-hidden">
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <div className="flex flex-1 flex-col overflow-hidden">
-        <header className="flex h-14 shrink-0 items-center justify-between bg-card/60 glass px-4 lg:px-6">
+        <header className="flex h-14 shrink-0 items-center justify-between border-b bg-background px-4 lg:px-6">
           <div className="flex items-center gap-3">
             <Button
               variant="ghost"
@@ -73,7 +68,7 @@ export function AppLayout() {
                 onValueChange={handleSwitchFamily}
                 disabled={switching}
               >
-                <SelectTrigger className="h-9 w-auto min-w-[120px] border-glass-border bg-muted/30 font-medium">
+                <SelectTrigger className="h-9 w-auto min-w-[120px] font-medium">
                   <div className="flex items-center gap-2">
                     <Users className="size-4 text-primary" />
                     <SelectValue placeholder="选择家庭" />

@@ -17,7 +17,7 @@ export function Toast({ title, description, variant, onDismiss, className }: Toa
         'pointer-events-auto relative flex w-full items-center justify-between gap-4 overflow-hidden rounded-lg border p-4 pr-8 shadow-lg transition-all',
         'border-border bg-background text-foreground',
         variant === 'destructive' &&
-          'border-destructive/50 bg-destructive text-destructive-foreground',
+          'border-destructive/50 bg-destructive text-white',
         variant === 'success' &&
           'border-income/40 bg-income/10 text-foreground',
         className,
@@ -29,7 +29,7 @@ export function Toast({ title, description, variant, onDismiss, className }: Toa
           <p
             className={cn(
               'text-sm opacity-90',
-              variant === 'destructive' && 'text-destructive-foreground/90',
+              variant === 'destructive' && 'text-white/90',
             )}
           >
             {description}
@@ -41,7 +41,7 @@ export function Toast({ title, description, variant, onDismiss, className }: Toa
         onClick={onDismiss}
         className={cn(
           'absolute right-2 top-2 rounded-md p-1 opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring',
-          variant === 'destructive' && 'focus:ring-destructive-foreground',
+          variant === 'destructive' && 'focus:ring-white',
         )}
         aria-label="Dismiss notification"
       >
