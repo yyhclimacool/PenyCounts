@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 import type { ChatMessage } from '@/types';
 import { chat as streamChat, getChatHistory } from '@/services/ai';
+import { useDataStore } from '@/stores/dataStore';
 
 export interface ChatMessageUI extends ChatMessage {
   isStreaming?: boolean;
@@ -85,6 +86,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         },
         onToolResult: (data) => {
           if (data.summary) {
+            useDataStore.getState().invalidateTransactions();
             full += data.summary;
             const content = full;
             set((s) => {

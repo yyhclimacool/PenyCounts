@@ -48,6 +48,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useAuthStore } from '@/stores/authStore';
+import { useDataStore } from '@/stores/dataStore';
 import * as aiService from '@/services/ai';
 import * as membersService from '@/services/members';
 import * as familyService from '@/services/family';
@@ -139,6 +140,7 @@ export default function SettingsPage() {
       setCreateFamilyOpen(false);
       setNewFamilyName('');
       setFamilies(await familyService.listFamilies());
+      useDataStore.getState().invalidateFamilies();
       addToast({ title: '家庭创建成功' });
     } catch {
       addToast({ title: '创建失败', variant: 'destructive' });
@@ -158,6 +160,7 @@ export default function SettingsPage() {
       setJoinFamilyOpen(false);
       setInviteCodeInput('');
       setFamilies(await familyService.listFamilies());
+      useDataStore.getState().invalidateFamilies();
       addToast({ title: '加入成功' });
     } catch (err: unknown) {
       const msg =
@@ -184,11 +187,29 @@ export default function SettingsPage() {
       await familyService.leaveFamily(familyId);
       setFamilyDetailOpen(false);
       setFamilies(await familyService.listFamilies());
+      useDataStore.getState().invalidateFamilies();
       addToast({ title: '已退出家庭' });
     } catch (err: unknown) {
       const msg =
         (err as { response?: { data?: { error?: string } } })?.response?.data
           ?.error ?? '退出失败';
+      addToast({ title: msg, variant: 'destructive' });
+    }
+  }
+
+  const [deleteFamilyTarget, setDeleteFamilyTarget] = useState<Family | null>(null);
+
+  async function handleDeleteFamily(familyId: string) {
+    try {
+      await familyService.deleteFamily(familyId);
+      setDeleteFamilyTarget(null);
+      setFamilies(await familyService.listFamilies());
+      useDataStore.getState().invalidateFamilies();
+      addToast({ title: '家庭已删除' });
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data
+          ?.error ?? '删除失败';
       addToast({ title: msg, variant: 'destructive' });
     }
   }
@@ -342,6 +363,7 @@ export default function SettingsPage() {
       setMemberDialogOpen(false);
       const updated = await membersService.list();
       setMembers(updated);
+      useDataStore.getState().invalidateMembers();
     } catch {
       addToast({ title: '操作失败', variant: 'destructive' });
     } finally {
@@ -358,6 +380,7 @@ export default function SettingsPage() {
       setDeletingMember(null);
       const updated = await membersService.list();
       setMembers(updated);
+      useDataStore.getState().invalidateMembers();
     } catch {
       addToast({ title: '删除失败', variant: 'destructive' });
     }
@@ -371,6 +394,7 @@ export default function SettingsPage() {
       addToast({ title: `已清除 ${deleted} 条记账记录` });
       setClearTxnDialogOpen(false);
       setClearTxnConfirmText('');
+      useDataStore.getState().invalidateTransactions();
     } catch {
       addToast({ title: '清除失败', variant: 'destructive' });
     } finally {
@@ -405,7 +429,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="space-y-8 p-4 sm:p-6 max-w-3xl mx-auto">
+    <div className="flex flex-col gap-8 p-4 sm:p-6 max-w-3xl mx-auto">
       <div className="flex items-center gap-3">
         <User className="h-6 w-6 text-muted-foreground" />
         <h1 className="text-2xl font-bold tracking-tight">个人中心</h1>
@@ -417,7 +441,7 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="p-2.5 bg-primary/10 rounded-xl">
-                <User className="h-5 w-5 text-primary" />
+                <User className="size-5 text-primary" />
               </div>
               <div>
                 <CardTitle>个人信息</CardTitle>
@@ -447,7 +471,7 @@ export default function SettingsPage() {
           {!user ? (
             <p className="text-sm text-muted-foreground">未登录</p>
           ) : !profileEditing ? (
-            <div className="space-y-4">
+            <div className="flex flex-col gap-4">
               <div className="flex items-center gap-4">
                 {user.avatar_url ? (
                   <img
@@ -477,7 +501,7 @@ export default function SettingsPage() {
               </div>
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="flex flex-col gap-4">
               <div className="flex items-center gap-4">
                 <button
                   type="button"
@@ -496,7 +520,7 @@ export default function SettingsPage() {
                     </div>
                   )}
                   <div className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Camera className="h-5 w-5 text-white" />
+                    <Camera className="size-5 text-white" />
                   </div>
                 </button>
                 <div className="text-sm text-muted-foreground">
@@ -612,7 +636,7 @@ export default function SettingsPage() {
                   }}
                   disabled={profileSaving}
                 >
-                  {profileSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {profileSaving && <Loader2 className="size-4 animate-spin" />}
                   保存
                 </Button>
               </div>
@@ -627,7 +651,7 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="p-2.5 bg-primary/10 rounded-xl">
-                <Home className="h-5 w-5 text-primary" />
+                <Home className="size-5 text-primary" />
               </div>
               <div>
                 <CardTitle>家庭管理</CardTitle>
@@ -652,7 +676,7 @@ export default function SettingsPage() {
                   setCreateFamilyOpen(true);
                 }}
               >
-                <Plus className="h-4 w-4" />
+                <Plus className="size-4" />
                 创建
               </Button>
             </div>
@@ -661,14 +685,14 @@ export default function SettingsPage() {
         <CardContent>
           {loadingFamilies ? (
             <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
           ) : families.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-6">
               暂无家庭
             </p>
           ) : (
-            <div className="space-y-2">
+            <div className="flex flex-col gap-2">
               {families.map((fam) => {
                 const isDefault = fam.id === user?.default_family_id;
                 return (
@@ -682,7 +706,7 @@ export default function SettingsPage() {
                     )}
                     onClick={() => handleViewFamily(fam.id)}
                   >
-                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary">
+                    <div className="size-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary">
                       {fam.name.charAt(0)}
                     </div>
                     <div className="flex-1 min-w-0">
@@ -704,17 +728,32 @@ export default function SettingsPage() {
                       </p>
                     </div>
                     {!isDefault && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-xs"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleSwitchFamily(fam.id);
-                        }}
-                      >
-                        设为默认
-                      </Button>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSwitchFamily(fam.id);
+                          }}
+                        >
+                          设为默认
+                        </Button>
+                        {fam.role === 'owner' && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-8 text-muted-foreground hover:text-destructive"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteFamilyTarget(fam);
+                            }}
+                          >
+                            <Trash2 className="size-4" />
+                          </Button>
+                        )}
+                      </div>
                     )}
                   </div>
                 );
@@ -752,7 +791,7 @@ export default function SettingsPage() {
               取消
             </Button>
             <Button onClick={handleCreateFamily} disabled={familySubmitting}>
-              {familySubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {familySubmitting && <Loader2 className="size-4 animate-spin" />}
               创建
             </Button>
           </DialogFooter>
@@ -788,7 +827,7 @@ export default function SettingsPage() {
               取消
             </Button>
             <Button onClick={handleJoinFamily} disabled={familySubmitting}>
-              {familySubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {familySubmitting && <Loader2 className="size-4 animate-spin" />}
               加入
             </Button>
           </DialogFooter>
@@ -803,7 +842,7 @@ export default function SettingsPage() {
             <DialogDescription>家庭详情与成员</DialogDescription>
           </DialogHeader>
           {familyDetail && (
-            <div className="space-y-4 py-2">
+            <div className="flex flex-col gap-4 py-2">
               <div>
                 <Label className="text-muted-foreground">邀请码</Label>
                 <div className="flex items-center gap-2 mt-1">
@@ -813,7 +852,7 @@ export default function SettingsPage() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8"
+                    className="size-8"
                     onClick={() => {
                       navigator.clipboard.writeText(familyDetail.invite_code);
                       addToast({ title: '已复制邀请码' });
@@ -825,7 +864,7 @@ export default function SettingsPage() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8"
+                      className="size-8"
                       onClick={() => handleRegenerateCode(familyDetail.id)}
                     >
                       <RefreshCw className="h-3.5 w-3.5" />
@@ -836,7 +875,7 @@ export default function SettingsPage() {
               <Separator />
               <div>
                 <Label className="text-muted-foreground">成员</Label>
-                <div className="space-y-2 mt-2">
+                <div className="flex flex-col gap-2 mt-2">
                   {familyDetail.members.map((m) => (
                     <div
                       key={m.user_id}
@@ -846,17 +885,17 @@ export default function SettingsPage() {
                         <img
                           src={m.avatar_url}
                           alt=""
-                          className="h-8 w-8 rounded-full object-cover"
+                          className="size-8 rounded-full object-cover"
                         />
                       ) : (
-                        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary">
+                        <div className="size-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary">
                           {m.nickname.charAt(0)}
                         </div>
                       )}
                       <span className="text-sm flex-1">{m.nickname}</span>
                       {m.role === 'owner' && (
                         <Badge variant="secondary" className="text-xs">
-                          <Crown className="h-3 w-3 mr-1" />
+                          <Crown className="size-3 mr-1" />
                           创建者
                         </Badge>
                       )}
@@ -872,7 +911,7 @@ export default function SettingsPage() {
                     size="sm"
                     onClick={() => handleLeaveFamily(familyDetail.id)}
                   >
-                    <LogOut className="h-4 w-4" />
+                    <LogOut className="size-4" />
                     退出家庭
                   </Button>
                 </>
@@ -882,13 +921,37 @@ export default function SettingsPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Delete Family Confirm Dialog */}
+      <Dialog open={!!deleteFamilyTarget} onOpenChange={() => setDeleteFamilyTarget(null)}>
+        <DialogContent className="sm:max-w-[380px]">
+          <DialogHeader>
+            <DialogTitle>删除家庭</DialogTitle>
+            <DialogDescription>
+              确定要删除「{deleteFamilyTarget?.name}」吗？该家庭下的所有数据将被永久删除，此操作不可恢复。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteFamilyTarget(null)}>
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteFamilyTarget && handleDeleteFamily(deleteFamilyTarget.id)}
+            >
+              <Trash2 className="size-4" />
+              确认删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* LLM Configuration */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="p-2.5 bg-primary/10 rounded-xl">
-                <Bot className="h-5 w-5 text-primary" />
+                <Bot className="size-5 text-primary" />
               </div>
               <div>
                 <CardTitle>LLM 配置</CardTitle>
@@ -910,10 +973,10 @@ export default function SettingsPage() {
         <CardContent>
           {loadingConfig ? (
             <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
           ) : llmConfig && !llmEditing ? (
-            <div className="space-y-4">
+            <div className="flex flex-col gap-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label className="text-muted-foreground">提供商</Label>
@@ -923,12 +986,12 @@ export default function SettingsPage() {
                     </p>
                     {llmConfig.is_active ? (
                       <Badge className="bg-income/15 text-income border-income/30 text-xs">
-                        <CheckCircle2 className="h-3 w-3 mr-1" />
+                        <CheckCircle2 className="size-3 mr-1" />
                         已启用
                       </Badge>
                     ) : (
                       <Badge variant="secondary" className="text-xs">
-                        <XCircle className="h-3 w-3 mr-1" />
+                        <XCircle className="size-3 mr-1" />
                         未启用
                       </Badge>
                     )}
@@ -957,15 +1020,15 @@ export default function SettingsPage() {
                 disabled={testing || !llmConfig.api_url}
               >
                 {testing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="size-4 animate-spin" />
                 ) : (
-                  <Zap className="h-4 w-4" />
+                  <Zap className="size-4" />
                 )}
                 测试连接
               </Button>
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="flex flex-col gap-4">
               <div>
                 <Label>提供商</Label>
                 <Select
@@ -1019,9 +1082,9 @@ export default function SettingsPage() {
                     onClick={() => setShowApiKey(!showApiKey)}
                   >
                     {showApiKey ? (
-                      <EyeOff className="h-4 w-4" />
+                      <EyeOff className="size-4" />
                     ) : (
-                      <Eye className="h-4 w-4" />
+                      <Eye className="size-4" />
                     )}
                   </button>
                 </div>
@@ -1064,9 +1127,9 @@ export default function SettingsPage() {
                   disabled={testing || !llmForm.api_url.trim() || !llmForm.model_name.trim()}
                 >
                   {testing ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <Loader2 className="size-4 animate-spin" />
                   ) : (
-                    <Zap className="h-4 w-4" />
+                    <Zap className="size-4" />
                   )}
                   测试
                 </Button>
@@ -1075,7 +1138,7 @@ export default function SettingsPage() {
                   disabled={llmSaving}
                 >
                   {llmSaving && (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <Loader2 className="size-4 animate-spin" />
                   )}
                   保存配置
                 </Button>
@@ -1091,7 +1154,7 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="p-2.5 bg-primary/10 rounded-xl">
-                <Users className="h-5 w-5 text-primary" />
+                <Users className="size-5 text-primary" />
               </div>
               <div>
                 <CardTitle>家庭成员</CardTitle>
@@ -1101,7 +1164,7 @@ export default function SettingsPage() {
               </div>
             </div>
             <Button size="sm" onClick={openAddMember}>
-              <Plus className="h-4 w-4" />
+              <Plus className="size-4" />
               添加
             </Button>
           </div>
@@ -1109,25 +1172,25 @@ export default function SettingsPage() {
         <CardContent>
           {loadingMembers ? (
             <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
           ) : members.length === 0 ? (
             <div className="flex flex-col items-center py-8 text-muted-foreground">
-              <Users className="h-10 w-10 mb-3 opacity-40" />
+              <Users className="size-10 mb-3 opacity-40" />
               <p className="text-sm mb-3">暂未添加家庭成员</p>
               <Button variant="outline" size="sm" onClick={openAddMember}>
-                <Plus className="h-4 w-4" />
+                <Plus className="size-4" />
                 添加成员
               </Button>
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="flex flex-col gap-2">
               {members.map((member) => (
                 <div
                   key={member.id}
                   className="flex items-center gap-3 py-3 px-4 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors"
                 >
-                  <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary">
+                  <div className="size-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary">
                     {member.name.charAt(0)}
                   </div>
                   <span className="flex-1 text-sm font-medium">
@@ -1136,7 +1199,7 @@ export default function SettingsPage() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8"
+                    className="size-8"
                     onClick={() => openEditMember(member)}
                   >
                     <Pencil className="h-3.5 w-3.5" />
@@ -1144,7 +1207,7 @@ export default function SettingsPage() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 text-destructive hover:text-destructive"
+                    className="size-8 text-destructive hover:text-destructive"
                     onClick={() => {
                       setDeletingMember(member);
                       setDeleteDialogOpen(true);
@@ -1163,7 +1226,7 @@ export default function SettingsPage() {
       <Card className="border-destructive/30">
         <CardHeader>
           <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-destructive" />
+            <AlertTriangle className="size-4 text-destructive" />
             <CardTitle className="text-destructive">危险操作</CardTitle>
           </div>
           <CardDescription>以下操作不可撤销，请谨慎执行</CardDescription>
@@ -1191,7 +1254,7 @@ export default function SettingsPage() {
         <DialogContent className="sm:max-w-[420px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-5 w-5" />
+              <AlertTriangle className="size-5" />
               确认清除所有记账记录
             </DialogTitle>
             <DialogDescription>
@@ -1214,7 +1277,7 @@ export default function SettingsPage() {
               onClick={handleClearAllTransactions}
               disabled={clearTxnConfirmText !== '删除所有记录' || clearingTxns}
             >
-              {clearingTxns && <Loader2 className="h-4 w-4 animate-spin" />}
+              {clearingTxns && <Loader2 className="size-4 animate-spin" />}
               确认清除
             </Button>
           </DialogFooter>
@@ -1257,7 +1320,7 @@ export default function SettingsPage() {
               disabled={memberSubmitting}
             >
               {memberSubmitting && (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="size-4 animate-spin" />
               )}
               {editingMember ? '保存' : '添加'}
             </Button>

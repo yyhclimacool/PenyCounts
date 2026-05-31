@@ -121,20 +121,24 @@ export async function chat(
         }
 
         let chunk = '';
-        try {
-          const obj = JSON.parse(payload) as {
-            content?: string;
-            delta?: string;
-            text?: string;
-            choices?: { delta?: { content?: string } }[];
-          };
-          chunk =
-            obj.delta ??
-            obj.content ??
-            obj.text ??
-            obj.choices?.[0]?.delta?.content ??
-            '';
-        } catch {
+        if (payload.startsWith('{') || payload.startsWith('[')) {
+          try {
+            const obj = JSON.parse(payload) as {
+              content?: string;
+              delta?: string;
+              text?: string;
+              choices?: { delta?: { content?: string } }[];
+            };
+            chunk =
+              obj.delta ??
+              obj.content ??
+              obj.text ??
+              obj.choices?.[0]?.delta?.content ??
+              '';
+          } catch {
+            chunk = payload;
+          }
+        } else {
           chunk = payload;
         }
         if (chunk) onDelta?.(chunk);

@@ -1,5 +1,5 @@
 use axum::response::sse::Event;
-use chrono::{Local, NaiveDate, NaiveTime, Utc};
+use chrono::{Datelike, Local, NaiveDate, NaiveTime, Utc};
 use futures::StreamExt;
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -9,10 +9,10 @@ use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::models::{
-    Category, ChatMessage, CreateTransactionRequest, LlmConfig, LlmConfigRequest, Member,
-    Subcategory,
+    Category, ChatMessage, CreateSocialGiftRequest, CreateTransactionRequest, LlmConfig,
+    LlmConfigRequest, Member, SocialGiftFilter, Subcategory,
 };
-use crate::services::transaction;
+use crate::services::{social_gift, stats, transaction};
 
 // ── LLM config CRUD ──────────────────────────────────────────────────
 
@@ -254,9 +254,10 @@ pub async fn chat_stream(
 
     sqlx::query(
         "INSERT INTO chat_messages (id, user_id, family_id, role, content, created_at)
-         VALUES ($1, $1, $2, 'user', $3, $4)",
+         VALUES ($1, $2, $3, 'user', $4, $5)",
     )
     .bind(Uuid::new_v4())
+    .bind(user_id)
     .bind(family_id)
     .bind(&message)
     .bind(Utc::now())
@@ -307,30 +308,36 @@ pub async fn chat_stream(
 
     let now = Local::now();
     let system_prompt = format!(
-        "你是 PenyCounts 家庭记账应用的 AI 助手。你的主要职责是帮助用户通过自然语言快速记账。\n\n\
+        "你是 PenyCounts 家庭记账应用的 AI 助手。你可以帮用户记账、查账、删账、改账、查看统计、记录人情往来。\n\n\
          当前时间: {now}\n\n\
          ## 可用分类（含子分类）:\n{category_list}\n\
          ## 已有家庭成员:\n{member_list}\n\n\
+         ## 你的能力:\n\
+         1. **记账**: 用户描述收支时，调用 create_transaction\n\
+         2. **查账**: 用户查询账单时，调用 query_transactions\n\
+         3. **删账**: 用户要删除记录时，先用 query_transactions 找到对应记录，再调用 delete_transaction\n\
+         4. **改账**: 用户要修改记录时，先查找，再调用 update_transaction\n\
+         5. **统计**: 用户问月度趋势、分类占比、成员消费等，调用 get_statistics\n\
+         6. **人情往来**: 用户记录红包、礼金等，调用 create_social_gift\n\
+         7. **查询人情**: 用户查询人情来往记录，调用 query_social_gifts\n\n\
          ## 记账规则:\n\
-         当用户描述一笔交易时，你需要提取以下信息并调用 create_transaction 工具：\n\
-         - **type** (必须): income 或 expense，根据语义判断\n\
-         - **amount** (必须): 金额数字\n\
-         - **category_name** (必须): 从上面的分类中选择最匹配的一级分类名称\n\
-         - **subcategory_name** (可选): 从对应分类的子分类中选择最匹配的\n\
-         - **date** (必须): 日期，格式 YYYY-MM-DD。如果用户说「今天」就是 {today}，「昨天」就是前一天，以此类推\n\
-         - **time** (可选): 时间，格式 HH:MM:SS。如果用户提到「中午」约12:00:00，「晚上」约19:00:00等\n\
-         - **currency** (可选): 币种代码，默认 CNY\n\
-         - **members** (可选): 涉及的人员名称列表。如果用户提到「和某某一起」，把相关人员都列出\n\
-         - **note** (可选): 备注信息\n\n\
-         ## 重要行为准则:\n\
-         1. 如果用户的描述中缺少 type 或 amount，你必须追问用户，不要猜测\n\
-         2. 如果缺少 category_name，根据上下文推断最可能的分类；如果无法推断，追问用户\n\
-         3. 如果缺少 date，默认使用今天 ({today})\n\
-         4. 成功创建交易后，用简洁的格式确认，包括: 类型、金额、分类、日期等关键信息\n\
-         5. 不要在回复中输出 JSON，直接调用工具即可\n\
-         6. 如果用户只是在闲聊或问问题，正常回答，不要强行记账\n\
-         7. 当用户询问消费统计或账单查询时，使用 query_transactions 工具查询数据，然后根据结果回答用户问题\n\
-         8. 查询时根据用户意图选择合适的时间范围。「最近一个月」从 {one_month_ago} 到 {today}，「本月」从本月1号到今天",
+         - **type**: income 或 expense，根据语义判断\n\
+         - **category_name**: 从可用分类中选择最匹配的\n\
+         - **date**: 格式 YYYY-MM-DD。「今天」= {today}，「昨天」= 前一天\n\
+         - 如果缺少 type 或 amount，追问用户\n\
+         - 如果缺少 date，默认今天 ({today})\n\n\
+         ## 人情往来规则:\n\
+         - type 为 given（送出）或 received（收到）\n\
+         - occasion 为事由（如 结婚、生日、满月 等）\n\
+         - 「送张三结婚红包」→ type=given, person_name=张三, occasion=结婚\n\
+         - 「收到李四的生日礼金」→ type=received, person_name=李四, occasion=生日\n\n\
+         ## 行为准则:\n\
+         1. 不要在回复中输出 JSON，直接调用工具\n\
+         2. 如果用户只是闲聊或问问题，正常回答\n\
+         3. 你可以在一次对话中连续调用多个工具（如先查后删）\n\
+         4. 删除和修改操作前，如果不确定是哪条记录，先查询确认\n\
+         5. 查询时间范围：「最近一个月」从 {one_month_ago} 到 {today}，「本月」从本月1号到今天\n\
+         6. 成功操作后用简洁格式确认结果",
         now = now.format("%Y-%m-%d %H:%M:%S"),
         category_list = category_list.trim(),
         member_list = member_list,
@@ -445,226 +452,443 @@ pub async fn chat_stream(
                     "required": ["start_date", "end_date"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "delete_transaction",
+                "description": "删除一条交易记录。需要提供交易ID。如果不确定ID，请先用 query_transactions 查询。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "transaction_id": {
+                            "type": "string",
+                            "description": "要删除的交易记录ID（UUID格式）"
+                        }
+                    },
+                    "required": ["transaction_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "update_transaction",
+                "description": "修改一条已有的交易记录。需要提供交易ID和要修改的字段。如果不确定ID，请先用 query_transactions 查询。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "transaction_id": {
+                            "type": "string",
+                            "description": "要修改的交易记录ID（UUID格式）"
+                        },
+                        "type": {
+                            "type": "string",
+                            "enum": ["income", "expense"],
+                            "description": "修改交易类型"
+                        },
+                        "amount": {
+                            "type": "number",
+                            "description": "修改金额"
+                        },
+                        "category_name": {
+                            "type": "string",
+                            "description": "修改一级分类名称"
+                        },
+                        "subcategory_name": {
+                            "type": "string",
+                            "description": "修改二级分类名称"
+                        },
+                        "date": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "修改日期，格式 YYYY-MM-DD"
+                        },
+                        "time": {
+                            "type": "string",
+                            "description": "修改时间，格式 HH:MM:SS"
+                        },
+                        "note": {
+                            "type": "string",
+                            "description": "修改备注"
+                        }
+                    },
+                    "required": ["transaction_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_statistics",
+                "description": "获取统计分析数据。可查询月度收支趋势、分类支出占比、成员消费分析。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "stat_type": {
+                            "type": "string",
+                            "enum": ["monthly_trend", "category_breakdown", "member_breakdown"],
+                            "description": "统计类型: monthly_trend=月度收支趋势, category_breakdown=分类支出占比, member_breakdown=成员消费分析"
+                        },
+                        "year": {
+                            "type": "integer",
+                            "description": "查询年份"
+                        },
+                        "month": {
+                            "type": "integer",
+                            "description": "查询月份（可选，1-12）"
+                        },
+                        "type": {
+                            "type": "string",
+                            "enum": ["income", "expense"],
+                            "description": "筛选收入或支出（仅 category_breakdown 和 member_breakdown 有效）"
+                        }
+                    },
+                    "required": ["stat_type", "year"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "create_social_gift",
+                "description": "记录一笔人情往来（红包、礼金、随礼等）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "enum": ["given", "received"],
+                            "description": "类型: given=送出, received=收到"
+                        },
+                        "person_name": {
+                            "type": "string",
+                            "description": "对方姓名"
+                        },
+                        "relation": {
+                            "type": "string",
+                            "description": "关系（如 朋友、亲戚、同事，可选）"
+                        },
+                        "occasion": {
+                            "type": "string",
+                            "description": "事由（如 结婚、生日、满月、乔迁）"
+                        },
+                        "amount": {
+                            "type": "number",
+                            "description": "金额"
+                        },
+                        "date": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "日期，格式 YYYY-MM-DD"
+                        },
+                        "note": {
+                            "type": "string",
+                            "description": "备注（可选）"
+                        }
+                    },
+                    "required": ["type", "person_name", "occasion", "amount", "date"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "query_social_gifts",
+                "description": "查询人情往来记录。可按时间、人名、类型筛选。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "start_date": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "查询起始日期，格式 YYYY-MM-DD"
+                        },
+                        "end_date": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "查询结束日期，格式 YYYY-MM-DD"
+                        },
+                        "person_name": {
+                            "type": "string",
+                            "description": "筛选对方姓名（可选）"
+                        },
+                        "type": {
+                            "type": "string",
+                            "enum": ["given", "received"],
+                            "description": "筛选类型（可选）"
+                        }
+                    },
+                    "required": ["start_date", "end_date"]
+                }
+            }
         }
     ]);
 
     let api_key = llm_config.api_key.unwrap_or_default();
-
-    let request_body = serde_json::json!({
-        "model": llm_config.model_name,
-        "messages": messages,
-        "stream": true,
-        "tools": tools,
-    });
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post(&llm_config.api_url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "svc::chat_stream: LLM request failed");
-            AppError::Internal(format!("LLM request failed: {}", e))
-        })?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "unknown".to_string());
-        tracing::error!(status = %status, body = %body, "svc::chat_stream: LLM API error");
-        return Err(AppError::Internal(format!(
-            "LLM API returned {}: {}",
-            status, body
-        )));
-    }
-
-    let pool_clone = pool.clone();
-    let user_id_clone = user_id;
-    let family_id_clone = family_id;
     let api_url = llm_config.api_url.clone();
-    let api_key_clone = api_key.clone();
     let model_name = llm_config.model_name.clone();
-    let messages_clone = messages.clone();
+    let pool_clone = pool.clone();
+
+    const MAX_ITERATIONS: usize = 10;
 
     let stream = async_stream::stream! {
+        let client = reqwest::Client::new();
         let mut full_response = String::new();
-        let mut byte_stream = response.bytes_stream();
-        let mut buffer = String::new();
 
-        // Accumulate tool call chunks
-        let mut tool_call_name = String::new();
-        let mut tool_call_args = String::new();
-        let mut has_tool_call = false;
+        for iteration in 0..MAX_ITERATIONS {
+            tracing::debug!(iteration, "agent loop: starting iteration");
 
-        while let Some(chunk) = byte_stream.next().await {
-            match chunk {
-                Ok(bytes) => {
-                    buffer.push_str(&String::from_utf8_lossy(&bytes));
+            let request_body = serde_json::json!({
+                "model": model_name,
+                "messages": messages,
+                "stream": true,
+                "tools": tools,
+            });
 
-                    while let Some(pos) = buffer.find('\n') {
-                        let line = buffer[..pos].trim().to_string();
-                        buffer = buffer[pos + 1..].to_string();
-
-                        if line.is_empty() {
-                            continue;
-                        }
-
-                        if line == "data: [DONE]" {
-                            break;
-                        }
-
-                        if let Some(data) = line.strip_prefix("data: ") {
-                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
-                                if let Some(content) = parsed["choices"][0]["delta"]["content"].as_str() {
-                                    if !content.is_empty() {
-                                        full_response.push_str(content);
-                                        yield Ok(Event::default().data(content));
-                                    }
-                                }
-
-                                if let Some(tool_calls) = parsed["choices"][0]["delta"]["tool_calls"].as_array() {
-                                    has_tool_call = true;
-                                    for tc in tool_calls {
-                                        if let Some(name) = tc["function"]["name"].as_str() {
-                                            tool_call_name = name.to_string();
-                                        }
-                                        if let Some(args) = tc["function"]["arguments"].as_str() {
-                                            tool_call_args.push_str(args);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            let response = match client
+                .post(&api_url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await
+            {
+                Ok(r) => r,
                 Err(e) => {
-                    tracing::error!(error = %e, "svc::chat_stream: stream error");
-                    yield Ok(Event::default().event("error").data(e.to_string()));
+                    tracing::error!(error = %e, "agent loop: LLM request failed");
+                    yield Ok(Event::default().event("error").data(format!("LLM 请求失败: {}", e)));
                     break;
                 }
+            };
+
+            if !response.status().is_success() {
+                let body = response.text().await.unwrap_or_default();
+                tracing::error!(body = %body, "agent loop: LLM API error");
+                yield Ok(Event::default().event("error").data(format!("LLM API 错误: {}", body)));
+                break;
             }
-        }
 
-        // Execute tool call if one was accumulated
-        if has_tool_call && tool_call_name == "create_transaction" {
-            tracing::debug!(args = %tool_call_args, "svc::chat_stream: executing create_transaction");
+            // Stream one LLM turn, accumulate content + tool calls
+            let mut turn_content = String::new();
+            let mut tool_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, args)
+            // Temp accumulators for streaming tool call chunks (keyed by index)
+            let mut tc_indices: std::collections::HashMap<usize, (String, String, String)> = std::collections::HashMap::new();
 
-            match execute_create_transaction(&pool_clone, user_id_clone, family_id_clone, &tool_call_args).await {
-                Ok(summary) => {
-                    full_response.push_str(&summary);
-                    let result_json = serde_json::json!({
-                        "success": true,
-                        "summary": summary,
-                    });
-                    yield Ok(Event::default().event("tool_result").data(
-                        serde_json::to_string(&result_json).unwrap_or_default()
-                    ));
-                }
-                Err(err_msg) => {
-                    let error_text = format!("\n\n记账失败: {}", err_msg);
-                    full_response.push_str(&error_text);
-                    let result_json = serde_json::json!({
-                        "success": false,
-                        "error": err_msg,
-                    });
-                    yield Ok(Event::default().event("tool_result").data(
-                        serde_json::to_string(&result_json).unwrap_or_default()
-                    ));
-                }
-            }
-        } else if has_tool_call && tool_call_name == "query_transactions" {
-            tracing::debug!(args = %tool_call_args, "svc::chat_stream: executing query_transactions");
+            let mut byte_stream = response.bytes_stream();
+            let mut buffer = String::new();
+            let mut thinking_phase = false;
 
-            match execute_query_transactions(&pool_clone, family_id_clone, &tool_call_args).await {
-                Ok(query_result_text) => {
-                    // Build second LLM request with tool result
-                    let mut second_messages = messages_clone.clone();
-                    second_messages.push(serde_json::json!({
-                        "role": "assistant",
-                        "tool_calls": [{
-                            "id": "call_query",
-                            "type": "function",
-                            "function": {
-                                "name": "query_transactions",
-                                "arguments": tool_call_args
-                            }
-                        }]
-                    }));
-                    second_messages.push(serde_json::json!({
-                        "role": "tool",
-                        "tool_call_id": "call_query",
-                        "content": query_result_text
-                    }));
+            while let Some(chunk) = byte_stream.next().await {
+                match chunk {
+                    Ok(bytes) => {
+                        buffer.push_str(&String::from_utf8_lossy(&bytes));
 
-                    let second_body = serde_json::json!({
-                        "model": model_name,
-                        "messages": second_messages,
-                        "stream": true,
-                    });
+                        while let Some(pos) = buffer.find('\n') {
+                            let line = buffer[..pos].trim().to_string();
+                            buffer = buffer[pos + 1..].to_string();
 
-                    let client2 = reqwest::Client::new();
-                    let resp2 = client2
-                        .post(&api_url)
-                        .header("Authorization", format!("Bearer {}", api_key_clone))
-                        .header("Content-Type", "application/json")
-                        .json(&second_body)
-                        .send()
-                        .await;
+                            if line.is_empty() { continue; }
+                            if line == "data: [DONE]" { break; }
 
-                    match resp2 {
-                        Ok(r) if r.status().is_success() => {
-                            let mut stream2 = r.bytes_stream();
-                            let mut buf2 = String::new();
+                            if let Some(data) = line.strip_prefix("data: ") {
+                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                                    let delta = &parsed["choices"][0]["delta"];
+                                    let reasoning = delta["reasoning_content"].as_str().unwrap_or("");
+                                    let content_text = delta["content"].as_str().unwrap_or("");
 
-                            while let Some(chunk2) = stream2.next().await {
-                                if let Ok(bytes2) = chunk2 {
-                                    buf2.push_str(&String::from_utf8_lossy(&bytes2));
+                                    if !reasoning.is_empty() {
+                                        thinking_phase = true;
+                                    }
 
-                                    while let Some(pos2) = buf2.find('\n') {
-                                        let line2 = buf2[..pos2].trim().to_string();
-                                        buf2 = buf2[pos2 + 1..].to_string();
+                                    if thinking_phase && reasoning.is_empty() && !content_text.is_empty() {
+                                        thinking_phase = false;
+                                    }
 
-                                        if line2.is_empty() || line2 == "data: [DONE]" {
-                                            continue;
-                                        }
+                                    if !content_text.is_empty() && !thinking_phase {
+                                        turn_content.push_str(content_text);
+                                        yield Ok(Event::default().data(content_text));
+                                    }
 
-                                        if let Some(data2) = line2.strip_prefix("data: ") {
-                                            if let Ok(p2) = serde_json::from_str::<serde_json::Value>(data2) {
-                                                if let Some(c) = p2["choices"][0]["delta"]["content"].as_str() {
-                                                    if !c.is_empty() {
-                                                        full_response.push_str(c);
-                                                        yield Ok(Event::default().data(c));
-                                                    }
-                                                }
+                                    // Accumulate tool calls (may arrive across multiple chunks)
+                                    if let Some(tcs) = parsed["choices"][0]["delta"]["tool_calls"].as_array() {
+                                        for tc in tcs {
+                                            let idx = tc["index"].as_u64().unwrap_or(0) as usize;
+                                            let entry = tc_indices.entry(idx).or_insert_with(|| {
+                                                let id = tc["id"].as_str().unwrap_or("").to_string();
+                                                (id, String::new(), String::new())
+                                            });
+                                            if let Some(id) = tc["id"].as_str() {
+                                                if !id.is_empty() { entry.0 = id.to_string(); }
+                                            }
+                                            if let Some(name) = tc["function"]["name"].as_str() {
+                                                entry.1.push_str(name);
+                                            }
+                                            if let Some(args) = tc["function"]["arguments"].as_str() {
+                                                entry.2.push_str(args);
                                             }
                                         }
                                     }
                                 }
                             }
                         }
-                        Ok(r) => {
-                            let err = format!("查询分析失败: LLM 返回 {}", r.status());
-                            full_response.push_str(&err);
-                            yield Ok(Event::default().data(&err));
-                        }
-                        Err(e) => {
-                            let err = format!("查询分析失败: {}", e);
-                            full_response.push_str(&err);
-                            yield Ok(Event::default().data(&err));
-                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "agent loop: stream error");
+                        yield Ok(Event::default().event("error").data(e.to_string()));
+                        break;
                     }
                 }
-                Err(err_msg) => {
-                    let error_text = format!("查询失败: {}", err_msg);
-                    full_response.push_str(&error_text);
-                    yield Ok(Event::default().data(&error_text));
+            }
+
+            // Collect accumulated tool calls sorted by index
+            let mut sorted_indices: Vec<usize> = tc_indices.keys().copied().collect();
+            sorted_indices.sort();
+            for idx in sorted_indices {
+                if let Some(tc) = tc_indices.remove(&idx) {
+                    tool_calls.push(tc);
                 }
             }
+
+            full_response.push_str(&turn_content);
+
+            // No tool calls → agent is done
+            if tool_calls.is_empty() {
+                tracing::debug!(iteration, "agent loop: no tool calls, done");
+                break;
+            }
+
+            tracing::debug!(iteration, count = tool_calls.len(), "agent loop: executing tool calls");
+
+            // Build assistant message with tool_calls for message history
+            let tc_json: Vec<serde_json::Value> = tool_calls.iter().map(|(id, name, args)| {
+                serde_json::json!({
+                    "id": id,
+                    "type": "function",
+                    "function": { "name": name, "arguments": args }
+                })
+            }).collect();
+
+            let mut assistant_msg = serde_json::json!({ "role": "assistant" });
+            if !turn_content.is_empty() {
+                assistant_msg["content"] = serde_json::Value::String(turn_content.clone());
+            }
+            assistant_msg["tool_calls"] = serde_json::Value::Array(tc_json);
+            messages.push(assistant_msg);
+
+            // Execute each tool call and append results
+            for (tc_id, tc_name, tc_args) in &tool_calls {
+                tracing::debug!(tool = %tc_name, args = %tc_args, "agent loop: executing tool");
+
+                let (result_content, is_success) = match tc_name.as_str() {
+                    "create_transaction" => {
+                        match execute_create_transaction(&pool_clone, user_id, family_id, tc_args).await {
+                            Ok(summary) => {
+                                full_response.push_str(&summary);
+                                let result_json = serde_json::json!({ "success": true, "summary": summary });
+                                yield Ok(Event::default().event("tool_result").data(
+                                    serde_json::to_string(&result_json).unwrap_or_default()
+                                ));
+                                (summary, true)
+                            }
+                            Err(err_msg) => {
+                                let result_json = serde_json::json!({ "success": false, "error": err_msg });
+                                yield Ok(Event::default().event("tool_result").data(
+                                    serde_json::to_string(&result_json).unwrap_or_default()
+                                ));
+                                (format!("Error: {}", err_msg), false)
+                            }
+                        }
+                    }
+                    "query_transactions" => {
+                        match execute_query_transactions(&pool_clone, family_id, tc_args).await {
+                            Ok(result) => (result, true),
+                            Err(err_msg) => (format!("Error: {}", err_msg), false),
+                        }
+                    }
+                    "delete_transaction" => {
+                        match execute_delete_transaction(&pool_clone, family_id, tc_args).await {
+                            Ok(summary) => {
+                                full_response.push_str(&summary);
+                                let result_json = serde_json::json!({ "success": true, "summary": summary });
+                                yield Ok(Event::default().event("tool_result").data(
+                                    serde_json::to_string(&result_json).unwrap_or_default()
+                                ));
+                                (summary, true)
+                            }
+                            Err(err_msg) => {
+                                let result_json = serde_json::json!({ "success": false, "error": err_msg });
+                                yield Ok(Event::default().event("tool_result").data(
+                                    serde_json::to_string(&result_json).unwrap_or_default()
+                                ));
+                                (format!("Error: {}", err_msg), false)
+                            }
+                        }
+                    }
+                    "update_transaction" => {
+                        match execute_update_transaction(&pool_clone, family_id, tc_args).await {
+                            Ok(summary) => {
+                                full_response.push_str(&summary);
+                                let result_json = serde_json::json!({ "success": true, "summary": summary });
+                                yield Ok(Event::default().event("tool_result").data(
+                                    serde_json::to_string(&result_json).unwrap_or_default()
+                                ));
+                                (summary, true)
+                            }
+                            Err(err_msg) => {
+                                let result_json = serde_json::json!({ "success": false, "error": err_msg });
+                                yield Ok(Event::default().event("tool_result").data(
+                                    serde_json::to_string(&result_json).unwrap_or_default()
+                                ));
+                                (format!("Error: {}", err_msg), false)
+                            }
+                        }
+                    }
+                    "get_statistics" => {
+                        match execute_get_statistics(&pool_clone, family_id, tc_args).await {
+                            Ok(result) => (result, true),
+                            Err(err_msg) => (format!("Error: {}", err_msg), false),
+                        }
+                    }
+                    "create_social_gift" => {
+                        match execute_create_social_gift(&pool_clone, family_id, tc_args).await {
+                            Ok(summary) => {
+                                full_response.push_str(&summary);
+                                let result_json = serde_json::json!({ "success": true, "summary": summary });
+                                yield Ok(Event::default().event("tool_result").data(
+                                    serde_json::to_string(&result_json).unwrap_or_default()
+                                ));
+                                (summary, true)
+                            }
+                            Err(err_msg) => {
+                                let result_json = serde_json::json!({ "success": false, "error": err_msg });
+                                yield Ok(Event::default().event("tool_result").data(
+                                    serde_json::to_string(&result_json).unwrap_or_default()
+                                ));
+                                (format!("Error: {}", err_msg), false)
+                            }
+                        }
+                    }
+                    "query_social_gifts" => {
+                        match execute_query_social_gifts(&pool_clone, family_id, tc_args).await {
+                            Ok(result) => (result, true),
+                            Err(err_msg) => (format!("Error: {}", err_msg), false),
+                        }
+                    }
+                    other => {
+                        (format!("Unknown tool: {}", other), false)
+                    }
+                };
+
+                let _ = is_success;
+                messages.push(serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": result_content,
+                }));
+            }
+
+            // Loop continues: next iteration sends updated messages back to LLM
         }
 
         yield Ok(Event::default().data("[DONE]"));
@@ -673,10 +897,11 @@ pub async fn chat_stream(
         if !full_response.is_empty() {
             let _ = sqlx::query(
                 "INSERT INTO chat_messages (id, user_id, family_id, role, content, created_at)
-                 Values ($1, $1, $2, 'assistant', $3, $4)",
+                 VALUES ($1, $2, $3, 'assistant', $4, $5)",
             )
             .bind(Uuid::new_v4())
-            .bind(family_id_clone)
+            .bind(user_id)
+            .bind(family_id)
             .bind(&full_response)
             .bind(Utc::now())
             .execute(&pool_clone)
@@ -893,7 +1118,8 @@ async fn execute_query_transactions(
         let type_mark = if txn.r#type == "income" { "+" } else { "-" };
         let note_part = txn.note.as_deref().unwrap_or("");
         lines.push(format!(
-            "{} | {}{} {} | {} | {}",
+            "[{}] {} | {}{} {} | {} | {}",
+            txn.id,
             txn.date.format("%Y-%m-%d"),
             type_mark,
             txn.amount,
@@ -911,6 +1137,351 @@ async fn execute_query_transactions(
         total_income,
         total_expense,
         total_income - total_expense,
+        if lines.is_empty() { "无记录".to_string() } else { lines.join("\n") },
+    );
+
+    Ok(summary)
+}
+
+async fn execute_delete_transaction(
+    pool: &PgPool,
+    family_id: Uuid,
+    args_json: &str,
+) -> Result<String, String> {
+    let args: serde_json::Value =
+        serde_json::from_str(args_json).map_err(|e| format!("解析参数失败: {}", e))?;
+
+    let txn_id_str = args["transaction_id"]
+        .as_str()
+        .ok_or("缺少 transaction_id")?;
+    let txn_id = Uuid::parse_str(txn_id_str)
+        .map_err(|_| format!("无效的交易ID: {}", txn_id_str))?;
+
+    transaction::delete_transaction(pool, family_id, txn_id)
+        .await
+        .map_err(|e| format!("删除交易失败: {}", e))?;
+
+    Ok(format!("\n\n✅ 已成功删除交易记录 ({})", &txn_id_str[..8]))
+}
+
+async fn execute_update_transaction(
+    pool: &PgPool,
+    family_id: Uuid,
+    args_json: &str,
+) -> Result<String, String> {
+    let args: serde_json::Value =
+        serde_json::from_str(args_json).map_err(|e| format!("解析参数失败: {}", e))?;
+
+    let txn_id_str = args["transaction_id"]
+        .as_str()
+        .ok_or("缺少 transaction_id")?;
+    let txn_id = Uuid::parse_str(txn_id_str)
+        .map_err(|_| format!("无效的交易ID: {}", txn_id_str))?;
+
+    let existing = transaction::get_transaction(pool, family_id, txn_id)
+        .await
+        .map_err(|e| format!("查询交易失败: {}", e))?;
+
+    let txn_type = args["type"]
+        .as_str()
+        .map(String::from)
+        .unwrap_or(existing.r#type.clone());
+
+    let amount = args["amount"]
+        .as_f64()
+        .map(|v| Decimal::from_str(&format!("{:.2}", v)).unwrap_or(existing.amount))
+        .unwrap_or(existing.amount);
+
+    let date = args["date"]
+        .as_str()
+        .map(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d"))
+        .transpose()
+        .map_err(|_| "日期格式错误".to_string())?
+        .unwrap_or(existing.date);
+
+    let time = args["time"]
+        .as_str()
+        .map(|t| {
+            NaiveTime::parse_from_str(t, "%H:%M:%S")
+                .or_else(|_| NaiveTime::parse_from_str(t, "%H:%M"))
+        })
+        .transpose()
+        .map_err(|_| "时间格式错误".to_string())?
+        .unwrap_or(existing.time);
+
+    let note = args["note"]
+        .as_str()
+        .map(String::from)
+        .or(existing.note.clone());
+
+    let category_id = if let Some(cat_name) = args["category_name"].as_str() {
+        let cat = sqlx::query_as::<_, Category>(
+            "SELECT * FROM categories WHERE name = $1 AND (user_id IS NULL OR family_id = $2) LIMIT 1",
+        )
+        .bind(cat_name)
+        .bind(family_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("查询分类失败: {}", e))?
+        .ok_or_else(|| format!("找不到分类「{}」", cat_name))?;
+        cat.id
+    } else {
+        existing.category_id
+    };
+
+    let subcategory_id = if let Some(sub_name) = args["subcategory_name"].as_str() {
+        let sub = sqlx::query_as::<_, Subcategory>(
+            "SELECT * FROM subcategories WHERE name = $1 AND category_id = $2 LIMIT 1",
+        )
+        .bind(sub_name)
+        .bind(category_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("查询子分类失败: {}", e))?;
+        sub.map(|s| s.id)
+    } else {
+        existing.subcategory_id
+    };
+
+    let req = CreateTransactionRequest {
+        category_id,
+        subcategory_id,
+        r#type: txn_type,
+        amount,
+        currency: existing.currency.clone(),
+        date,
+        time,
+        location: existing.location.clone(),
+        note,
+        members: None,
+    };
+
+    let _ = transaction::update_transaction(pool, family_id, txn_id, req)
+        .await
+        .map_err(|e| format!("更新交易失败: {}", e))?;
+
+    let mut changes = Vec::new();
+    if args["amount"].is_number() { changes.push(format!("金额→{}", amount)); }
+    if args["category_name"].is_string() { changes.push("分类已更新".to_string()); }
+    if args["date"].is_string() { changes.push(format!("日期→{}", date)); }
+    if args["note"].is_string() { changes.push("备注已更新".to_string()); }
+    if args["type"].is_string() { changes.push(format!("类型→{}", args["type"].as_str().unwrap())); }
+
+    let change_desc = if changes.is_empty() { "无变更".to_string() } else { changes.join("，") };
+    Ok(format!("\n\n✅ 已更新交易记录：{}", change_desc))
+}
+
+async fn execute_get_statistics(
+    pool: &PgPool,
+    family_id: Uuid,
+    args_json: &str,
+) -> Result<String, String> {
+    let args: serde_json::Value =
+        serde_json::from_str(args_json).map_err(|e| format!("解析参数失败: {}", e))?;
+
+    let stat_type = args["stat_type"]
+        .as_str()
+        .ok_or("缺少 stat_type")?;
+    let year = args["year"]
+        .as_i64()
+        .ok_or("缺少 year")? as i32;
+    let month = args["month"].as_i64().map(|m| m as u32);
+    let txn_type = args["type"].as_str();
+
+    match stat_type {
+        "monthly_trend" => {
+            let data = stats::monthly_trend(pool, family_id, year)
+                .await
+                .map_err(|e| format!("查询月度趋势失败: {}", e))?;
+
+            if data.is_empty() {
+                return Ok(format!("{}年暂无收支记录", year));
+            }
+
+            let mut lines = vec![format!("{}年月度收支趋势：", year)];
+            for row in &data {
+                lines.push(format!(
+                    "{}月: 收入 {} / 支出 {} / 结余 {}",
+                    row.month, row.income, row.expense,
+                    row.income - row.expense,
+                ));
+            }
+            let total_income: Decimal = data.iter().map(|r| r.income).sum();
+            let total_expense: Decimal = data.iter().map(|r| r.expense).sum();
+            lines.push(format!(
+                "\n年度合计: 收入 {} / 支出 {} / 结余 {}",
+                total_income, total_expense, total_income - total_expense,
+            ));
+            Ok(lines.join("\n"))
+        }
+        "category_breakdown" => {
+            let data = stats::category_breakdown(pool, family_id, year, month, txn_type)
+                .await
+                .map_err(|e| format!("查询分类占比失败: {}", e))?;
+
+            if data.is_empty() {
+                let period = month.map(|m| format!("{}年{}月", year, m)).unwrap_or(format!("{}年", year));
+                return Ok(format!("{}暂无{}数据", period, txn_type.unwrap_or("支出")));
+            }
+
+            let period = month.map(|m| format!("{}年{}月", year, m)).unwrap_or(format!("{}年", year));
+            let type_label = if txn_type == Some("income") { "收入" } else { "支出" };
+            let mut lines = vec![format!("{} {} 分类占比：", period, type_label)];
+            for row in &data {
+                lines.push(format!(
+                    "{} {}: {} ({:.1}%)",
+                    row.icon, row.category_name, row.total, row.percentage,
+                ));
+            }
+            Ok(lines.join("\n"))
+        }
+        "member_breakdown" => {
+            let data = stats::member_breakdown(pool, family_id, year, month, txn_type)
+                .await
+                .map_err(|e| format!("查询成员消费失败: {}", e))?;
+
+            if data.is_empty() {
+                let period = month.map(|m| format!("{}年{}月", year, m)).unwrap_or(format!("{}年", year));
+                return Ok(format!("{}暂无成员消费数据", period));
+            }
+
+            let period = month.map(|m| format!("{}年{}月", year, m)).unwrap_or(format!("{}年", year));
+            let mut lines = vec![format!("{} 成员消费分析：", period)];
+            for row in &data {
+                lines.push(format!("{}: {}", row.member_name, row.total));
+            }
+            Ok(lines.join("\n"))
+        }
+        _ => Err(format!("不支持的统计类型: {}", stat_type)),
+    }
+}
+
+async fn execute_create_social_gift(
+    pool: &PgPool,
+    family_id: Uuid,
+    args_json: &str,
+) -> Result<String, String> {
+    let args: serde_json::Value =
+        serde_json::from_str(args_json).map_err(|e| format!("解析参数失败: {}", e))?;
+
+    let gift_type = args["type"]
+        .as_str()
+        .ok_or("缺少 type（given/received）")?
+        .to_string();
+    let person_name = args["person_name"]
+        .as_str()
+        .ok_or("缺少 person_name")?
+        .to_string();
+    let occasion = args["occasion"]
+        .as_str()
+        .ok_or("缺少 occasion")?
+        .to_string();
+    let amount = args["amount"]
+        .as_f64()
+        .ok_or("缺少 amount")?;
+    let date_str = args["date"]
+        .as_str()
+        .ok_or("缺少 date")?;
+    let relation = args["relation"].as_str().map(String::from);
+    let note = args["note"].as_str().map(String::from);
+
+    let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+        .map_err(|_| format!("日期格式错误: {}", date_str))?;
+    let amount_decimal = Decimal::from_str(&format!("{:.2}", amount))
+        .map_err(|_| format!("金额格式错误: {}", amount))?;
+
+    let req = CreateSocialGiftRequest {
+        r#type: gift_type.clone(),
+        person_name: person_name.clone(),
+        relation,
+        occasion: occasion.clone(),
+        amount: amount_decimal,
+        currency: "CNY".to_string(),
+        date,
+        note,
+    };
+
+    social_gift::create_social_gift(pool, family_id, req)
+        .await
+        .map_err(|e| format!("记录人情往来失败: {}", e))?;
+
+    let type_label = if gift_type == "given" { "送出" } else { "收到" };
+    Ok(format!(
+        "\n\n✅ 人情记录成功！\n{} {} {:.2} CNY\n对方: {}\n事由: {}\n日期: {}",
+        type_label, person_name, amount, person_name, occasion, date_str,
+    ))
+}
+
+async fn execute_query_social_gifts(
+    pool: &PgPool,
+    family_id: Uuid,
+    args_json: &str,
+) -> Result<String, String> {
+    let args: serde_json::Value =
+        serde_json::from_str(args_json).map_err(|e| format!("解析参数失败: {}", e))?;
+
+    let start_date_str = args["start_date"]
+        .as_str()
+        .ok_or("缺少 start_date")?;
+    let end_date_str = args["end_date"]
+        .as_str()
+        .ok_or("缺少 end_date")?;
+
+    let start_date = NaiveDate::parse_from_str(start_date_str, "%Y-%m-%d")
+        .map_err(|_| format!("起始日期格式错误: {}", start_date_str))?;
+    let _end_date = NaiveDate::parse_from_str(end_date_str, "%Y-%m-%d")
+        .map_err(|_| format!("结束日期格式错误: {}", end_date_str))?;
+
+    let person_name = args["person_name"].as_str().map(String::from);
+    let gift_type = args["type"].as_str().map(String::from);
+
+    let filter = SocialGiftFilter {
+        r#type: gift_type,
+        person_name: person_name.clone(),
+        year: Some(start_date.year()),
+        page: Some(1),
+        per_page: Some(100),
+    };
+
+    let result = social_gift::list_social_gifts(pool, family_id, filter)
+        .await
+        .map_err(|e| format!("查询人情往来失败: {}", e))?;
+
+    let mut total_given = Decimal::ZERO;
+    let mut total_received = Decimal::ZERO;
+    let mut lines = Vec::new();
+
+    for gift in &result.data {
+        if gift.r#type == "given" {
+            total_given += gift.amount;
+        } else {
+            total_received += gift.amount;
+        }
+        let type_mark = if gift.r#type == "given" { "送→" } else { "收←" };
+        let note_part = gift.note.as_deref().unwrap_or("");
+        lines.push(format!(
+            "{} {} {} {:.2} {} | {} | {}",
+            gift.date.format("%Y-%m-%d"),
+            type_mark,
+            gift.person_name,
+            gift.amount,
+            gift.currency,
+            gift.occasion,
+            note_part,
+        ));
+    }
+
+    let person_label = person_name
+        .map(|n| format!("（筛选: {}）", n))
+        .unwrap_or_default();
+
+    let summary = format!(
+        "人情往来记录{}:\n总计 {} 条\n送出合计: {:.2} CNY\n收到合计: {:.2} CNY\n净额: {:.2} CNY\n\n明细:\n{}",
+        person_label,
+        result.total,
+        total_given,
+        total_received,
+        total_received - total_given,
         if lines.is_empty() { "无记录".to_string() } else { lines.join("\n") },
     );
 

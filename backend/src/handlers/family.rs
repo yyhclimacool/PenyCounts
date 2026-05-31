@@ -62,6 +62,14 @@ pub async fn switch_default_family(
     services::family::switch_default_family(&state.pool, auth.user_id, req).await
 }
 
+pub async fn delete_family(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<(), AppError> {
+    services::family::delete_family(&state.pool, auth.user_id, id).await
+}
+
 pub async fn regenerate_invite_code(
     State(state): State<AppState>,
     auth: AuthUser,

@@ -42,6 +42,7 @@ import {
 import * as transactionsService from '@/services/transactions';
 import * as categoriesService from '@/services/categories';
 import * as membersService from '@/services/members';
+import { useDataStore } from '@/stores/dataStore';
 import type { Transaction, Category, Member } from '@/types';
 import { formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
@@ -110,6 +111,9 @@ export default function TransactionsPage() {
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const transactionsRev = useDataStore((s) => s.transactionsRev);
+  const categoriesRev = useDataStore((s) => s.categoriesRev);
+  const membersRev = useDataStore((s) => s.membersRev);
 
   const fetchTransactions = useCallback(async () => {
     setLoading(true);
@@ -135,7 +139,7 @@ export default function TransactionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterType, filterCategoryId, filterSubcategoryId, filterMember, dateFrom, dateTo, minAmount, maxAmount, searchText, addToast]);
+  }, [page, filterType, filterCategoryId, filterSubcategoryId, filterMember, dateFrom, dateTo, minAmount, maxAmount, searchText, addToast, transactionsRev]);
 
   useEffect(() => {
     fetchTransactions();
@@ -148,7 +152,7 @@ export default function TransactionsPage() {
         setAllMembers(mems);
       },
     );
-  }, []);
+  }, [categoriesRev, membersRev]);
 
   useEffect(() => {
     if (searchParams.get('add') === 'true') {
@@ -261,6 +265,7 @@ export default function TransactionsPage() {
 
       setDialogOpen(false);
       fetchTransactions();
+      useDataStore.getState().invalidateTransactions();
       if (memberTags.length > 0) {
         membersService.list().then(setAllMembers).catch(() => {});
       }
@@ -279,6 +284,7 @@ export default function TransactionsPage() {
       setDeleteDialogOpen(false);
       setDeletingId(null);
       fetchTransactions();
+      useDataStore.getState().invalidateTransactions();
     } catch {
       addToast({ title: '删除失败', variant: 'destructive' });
     }
@@ -297,6 +303,7 @@ export default function TransactionsPage() {
       });
       if (result.imported > 0) {
         fetchTransactions();
+        useDataStore.getState().invalidateTransactions();
         Promise.all([categoriesService.getAll(), membersService.list()]).then(
           ([cats, mems]) => { setCategories(cats); setAllMembers(mems); },
         );
@@ -361,7 +368,7 @@ export default function TransactionsPage() {
   }
 
   return (
-    <div className="space-y-4 p-4 sm:p-6 max-w-5xl mx-auto">
+    <div className="flex flex-col gap-4 p-4 sm:p-6 max-w-5xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight">交易记录</h1>
@@ -378,7 +385,7 @@ export default function TransactionsPage() {
             onClick={handleExport}
             disabled={exporting}
           >
-            {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            {exporting ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
             导出 CSV
           </Button>
           <Button
@@ -386,11 +393,11 @@ export default function TransactionsPage() {
             onClick={() => fileInputRef.current?.click()}
             disabled={importing}
           >
-            {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            {importing ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
             导入 CSV
           </Button>
           <Button onClick={openAddDialog}>
-            <Plus className="h-4 w-4" />
+            <Plus className="size-4" />
             添加交易
           </Button>
         </div>
@@ -438,7 +445,7 @@ export default function TransactionsPage() {
             <div>
               <Label className="text-xs text-muted-foreground mb-1.5 block">搜索</Label>
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
                 <Input
                   placeholder="地点、备注、人员..."
                   value={searchInput}
@@ -559,13 +566,13 @@ export default function TransactionsPage() {
               暂无交易记录
             </p>
             <Button variant="outline" size="sm" onClick={openAddDialog}>
-              <Plus className="h-4 w-4" />
+              <Plus className="size-4" />
               添加交易
             </Button>
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-4">
+        <div className="flex flex-col gap-4">
           {grouped.map(([monthKey, txs]) => {
             const monthIncome = txs
               .filter((t) => t.type === 'income')
@@ -681,7 +688,7 @@ export default function TransactionsPage() {
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="h-7 w-7"
+                                  className="size-7"
                                   onClick={() => openEditDialog(tx)}
                                 >
                                   <Pencil className="h-3.5 w-3.5" />
@@ -689,7 +696,7 @@ export default function TransactionsPage() {
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                  className="size-7 text-destructive hover:text-destructive hover:bg-destructive/10"
                                   onClick={() => {
                                     setDeletingId(tx.id);
                                     setDeleteDialogOpen(true);
@@ -721,7 +728,7 @@ export default function TransactionsPage() {
             disabled={page <= 1}
             onClick={() => setPage((p) => p - 1)}
           >
-            <ChevronLeft className="h-4 w-4" />
+            <ChevronLeft className="size-4" />
           </Button>
           <span className="text-sm text-muted-foreground px-3 tabular-nums">
             {page} / {totalPages}
@@ -732,7 +739,7 @@ export default function TransactionsPage() {
             disabled={page >= totalPages}
             onClick={() => setPage((p) => p + 1)}
           >
-            <ChevronRight className="h-4 w-4" />
+            <ChevronRight className="size-4" />
           </Button>
         </div>
       )}
@@ -749,7 +756,7 @@ export default function TransactionsPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-2">
+          <div className="flex flex-col gap-4 py-2">
             {/* Type Toggle */}
             <div className="flex rounded-lg border p-1 gap-1">
               <button
@@ -917,7 +924,7 @@ export default function TransactionsPage() {
                         )
                       }
                     >
-                      <X className="h-3 w-3" />
+                      <X className="size-3" />
                     </button>
                   </Badge>
                 ))}
@@ -976,7 +983,7 @@ export default function TransactionsPage() {
             </Button>
             <Button onClick={handleSubmit} disabled={submitting}>
               {submitting && (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="size-4 animate-spin" />
               )}
               {editingTx ? '保存' : '添加'}
             </Button>

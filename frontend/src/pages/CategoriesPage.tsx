@@ -28,6 +28,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import * as categoriesService from '@/services/categories';
+import { useDataStore } from '@/stores/dataStore';
 import type { Category, Subcategory } from '@/types';
 import { cn } from '@/utils/cn';
 import { useToast } from '@/hooks/useToast';
@@ -156,6 +157,7 @@ export default function CategoriesPage() {
       }
       setCatDialogOpen(false);
       fetchCategories();
+      useDataStore.getState().invalidateCategories();
     } catch {
       addToast({ title: '操作失败', variant: 'destructive' });
     } finally {
@@ -186,6 +188,7 @@ export default function CategoriesPage() {
       }
       setSubDialogOpen(false);
       fetchCategories();
+      useDataStore.getState().invalidateCategories();
     } catch {
       addToast({ title: '操作失败', variant: 'destructive' });
     } finally {
@@ -209,6 +212,7 @@ export default function CategoriesPage() {
       setDeleteDialogOpen(false);
       setDeletingItem(null);
       fetchCategories();
+      useDataStore.getState().invalidateCategories();
     } catch {
       addToast({ title: '删除失败', variant: 'destructive' });
     } finally {
@@ -227,7 +231,7 @@ export default function CategoriesPage() {
             key={icon}
             type="button"
             className={cn(
-              'w-9 h-9 flex items-center justify-center rounded-lg text-lg transition-all cursor-pointer hover:scale-110',
+              'size-9 flex items-center justify-center rounded-lg text-lg transition-all cursor-pointer hover:scale-110',
               selected === icon
                 ? 'bg-primary/15 ring-2 ring-primary'
                 : 'bg-muted hover:bg-muted/80',
@@ -254,7 +258,7 @@ export default function CategoriesPage() {
             size="sm"
             onClick={() => openAddCategory(type)}
           >
-            <Plus className="h-4 w-4" />
+            <Plus className="size-4" />
             添加分类
           </Button>
         </div>
@@ -262,7 +266,7 @@ export default function CategoriesPage() {
     }
 
     return (
-      <div className="space-y-3">
+      <div className="flex flex-col gap-3">
         {cats.map((cat) => {
           const isSystem = isSystemCategory(cat);
           const isExpanded = expandedId === cat.id;
@@ -279,7 +283,7 @@ export default function CategoriesPage() {
                   setExpandedId(isExpanded ? null : cat.id)
                 }
               >
-                <span className="text-2xl w-10 h-10 flex items-center justify-center rounded-xl bg-muted/60">
+                <span className="text-2xl size-10 flex items-center justify-center rounded-xl bg-muted/60">
                   {cat.icon}
                 </span>
                 <div className="flex-1 min-w-0">
@@ -288,7 +292,7 @@ export default function CategoriesPage() {
                       {cat.name}
                     </p>
                     {isSystem && (
-                      <Lock className="h-3 w-3 text-muted-foreground" />
+                      <Lock className="size-3 text-muted-foreground" />
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
@@ -303,7 +307,7 @@ export default function CategoriesPage() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8"
+                        className="size-8"
                         onClick={(e) => {
                           e.stopPropagation();
                           openEditCategory(cat);
@@ -314,7 +318,7 @@ export default function CategoriesPage() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8 text-destructive hover:text-destructive"
+                        className="size-8 text-destructive hover:text-destructive"
                         onClick={(e) => {
                           e.stopPropagation();
                           setDeletingItem({
@@ -330,15 +334,15 @@ export default function CategoriesPage() {
                     </>
                   )}
                   {isExpanded ? (
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    <ChevronDown className="size-4 text-muted-foreground" />
                   ) : (
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                    <ChevronRight className="size-4 text-muted-foreground" />
                   )}
                 </div>
               </div>
 
               {isExpanded && (
-                <div className="border-t px-4 pb-4 pt-3 space-y-2 animate-fade-in">
+                <div className="border-t px-4 pb-4 pt-3 flex flex-col gap-2 animate-fade-in">
                   {subs.length === 0 ? (
                     <p className="text-xs text-muted-foreground py-2 text-center">
                       暂无子分类
@@ -356,22 +360,22 @@ export default function CategoriesPage() {
                             {sub.name}
                           </span>
                           {isSubSystem && (
-                            <Lock className="h-3 w-3 text-muted-foreground" />
+                            <Lock className="size-3 text-muted-foreground" />
                           )}
                           {!isSubSystem && (
                             <div className="flex gap-1">
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-7 w-7"
+                                className="size-7"
                                 onClick={() => openEditSubcategory(sub)}
                               >
-                                <Pencil className="h-3 w-3" />
+                                <Pencil className="size-3" />
                               </Button>
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-7 w-7 text-destructive hover:text-destructive"
+                                className="size-7 text-destructive hover:text-destructive"
                                 onClick={() => {
                                   setDeletingItem({
                                     type: 'subcategory',
@@ -382,7 +386,7 @@ export default function CategoriesPage() {
                                   setDeleteDialogOpen(true);
                                 }}
                               >
-                                <Trash2 className="h-3 w-3" />
+                                <Trash2 className="size-3" />
                               </Button>
                             </div>
                           )}
@@ -417,7 +421,7 @@ export default function CategoriesPage() {
   }
 
   return (
-    <div className="space-y-6 p-4 sm:p-6 max-w-3xl mx-auto">
+    <div className="flex flex-col gap-6 p-4 sm:p-6 max-w-3xl mx-auto">
       <h1 className="text-2xl font-bold tracking-tight">分类管理</h1>
 
       <Tabs defaultValue="expense">
@@ -436,7 +440,7 @@ export default function CategoriesPage() {
               size="sm"
               onClick={() => openAddCategory('expense')}
             >
-              <Plus className="h-4 w-4" />
+              <Plus className="size-4" />
               添加支出分类
             </Button>
           </div>
@@ -449,7 +453,7 @@ export default function CategoriesPage() {
               size="sm"
               onClick={() => openAddCategory('income')}
             >
-              <Plus className="h-4 w-4" />
+              <Plus className="size-4" />
               添加收入分类
             </Button>
           </div>
@@ -468,7 +472,7 @@ export default function CategoriesPage() {
               {catDialogType === 'income' ? '收入' : '支出'}分类
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-2">
+          <div className="flex flex-col gap-4 py-2">
             <div>
               <Label>分类名称</Label>
               <Input
@@ -508,7 +512,7 @@ export default function CategoriesPage() {
             </Button>
             <Button onClick={handleCategorySubmit} disabled={submitting}>
               {submitting && (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="size-4 animate-spin" />
               )}
               {editingCategory ? '保存' : '添加'}
             </Button>
@@ -527,7 +531,7 @@ export default function CategoriesPage() {
               为上级分类添加子分类
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-2">
+          <div className="flex flex-col gap-4 py-2">
             <div>
               <Label>子分类名称</Label>
               <Input
@@ -570,7 +574,7 @@ export default function CategoriesPage() {
               disabled={submitting}
             >
               {submitting && (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="size-4 animate-spin" />
               )}
               {editingSubcategory ? '保存' : '添加'}
             </Button>
@@ -604,7 +608,7 @@ export default function CategoriesPage() {
               disabled={submitting}
             >
               {submitting && (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="size-4 animate-spin" />
               )}
               删除
             </Button>

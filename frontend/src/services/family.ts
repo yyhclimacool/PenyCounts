@@ -25,6 +25,10 @@ export async function leaveFamily(id: string): Promise<void> {
   await api.post(`/families/${id}/leave`);
 }
 
+export async function deleteFamily(id: string): Promise<void> {
+  await api.delete(`/families/${id}`);
+}
+
 export async function switchDefaultFamily(family_id: string): Promise<void> {
   await api.put('/families/switch', { family_id });
 }

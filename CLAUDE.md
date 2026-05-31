@@ -58,7 +58,13 @@ Access DB in Docker: `docker exec penycounts-postgres-1 psql -U penycounts -d pe
 - **Write operations** (create, import): pass both `auth.user_id` (for FK `user_id` column) and `auth.family_id` (for scoping)
 - Family switching: `PUT /api/families/switch` updates `default_family_id`, then frontend reloads
 
-**AI chat:** Backend proxies user messages to a user-configured OpenAI-compatible LLM endpoint. Responses stream via SSE (`POST /api/ai/chat`). System prompt includes user's category tree and defines `create_transaction`/`query_transactions` tools. `POST /api/ai/test-connection` validates LLM config without streaming.
+**AI agent:** Backend proxies user messages to a user-configured OpenAI-compatible LLM endpoint. Responses stream via SSE (`POST /api/ai/chat`). The agent runs a multi-turn tool-use loop (up to 10 iterations) — each iteration streams LLM output, collects tool calls, executes them, appends results to the message history, and loops until the LLM responds without tool calls.
+
+7 tools: `create_transaction`, `query_transactions`, `delete_transaction`, `update_transaction`, `get_statistics`, `create_social_gift`, `query_social_gifts`. All implemented in `services/ai.rs` as `execute_*` functions. System prompt includes the user's category tree and member list.
+
+Reasoning model support: the streaming loop detects `reasoning_content` (DeepSeek R1 etc.) and silently filters it + any leaked `content` during the thinking phase, so only the final answer is streamed to the client.
+
+**SSE + compression caveat:** `CompressionLayer` buffers responses, which breaks SSE streaming. The router splits into two sub-routers: `api_routes` (with compression) and `sse_routes` (`/api/ai/chat`, no compression), merged into the parent router.
 
 ## Key Conventions
 
@@ -73,6 +79,7 @@ Access DB in Docker: `docker exec penycounts-postgres-1 psql -U penycounts -d pe
 - Pagination pattern: query params `page` + `per_page`, response wraps in `PaginatedResponse { data, total, page, per_page }`
 - Members table has `UNIQUE (family_id, name)` constraint — member names are unique per family
 - CSV import uses `classify_transaction()` to map free-form category strings from external data to the app's two-level category system
+- **Cross-component data invalidation:** `dataStore.ts` uses a Zustand revision-counter pattern (`transactionsRev`, `categoriesRev`, `membersRev`, `familiesRev`). Components subscribe to the relevant `*Rev` counter in their `useEffect` deps; mutating components call `invalidate*()` after writes. The AI chat store calls `invalidateTransactions()` on successful tool results.
 
 ## Adding a New Feature
 

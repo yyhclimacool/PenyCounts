@@ -244,11 +244,11 @@ export default function SocialGiftsPage() {
   }
 
   return (
-    <div className="space-y-6 p-4 sm:p-6 max-w-4xl mx-auto">
+    <div className="flex flex-col gap-6 p-4 sm:p-6 max-w-4xl mx-auto">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight">人情往来</h1>
         <Button onClick={openAddDialog}>
-          <Plus className="h-4 w-4" />
+          <Plus className="size-4" />
           添加记录
         </Button>
       </div>
@@ -259,7 +259,7 @@ export default function SocialGiftsPage() {
           <CardContent className="p-5">
             <div className="flex items-center gap-3 mb-2">
               <div className="p-2 bg-expense/10 rounded-xl">
-                <ArrowUpRight className="h-5 w-5 text-expense" />
+                <ArrowUpRight className="size-5 text-expense" />
               </div>
               <span className="text-sm text-muted-foreground">
                 {dayjs().year()}年 送出
@@ -274,7 +274,7 @@ export default function SocialGiftsPage() {
           <CardContent className="p-5">
             <div className="flex items-center gap-3 mb-2">
               <div className="p-2 bg-income/10 rounded-xl">
-                <ArrowDownLeft className="h-5 w-5 text-income" />
+                <ArrowDownLeft className="size-5 text-income" />
               </div>
               <span className="text-sm text-muted-foreground">
                 {dayjs().year()}年 收到
@@ -289,7 +289,7 @@ export default function SocialGiftsPage() {
           <CardContent className="p-5">
             <div className="flex items-center gap-3 mb-2">
               <div className="p-2 bg-primary/10 rounded-xl">
-                <Scale className="h-5 w-5 text-primary" />
+                <Scale className="size-5 text-primary" />
               </div>
               <span className="text-sm text-muted-foreground">净余额</span>
             </div>
@@ -322,7 +322,7 @@ export default function SocialGiftsPage() {
           </TabsList>
         </Tabs>
         <div className="relative flex-1 max-w-xs">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
           <Input
             placeholder="搜索姓名..."
             value={searchText}
@@ -345,13 +345,13 @@ export default function SocialGiftsPage() {
               暂无人情记录
             </p>
             <Button variant="outline" size="sm" onClick={openAddDialog}>
-              <Plus className="h-4 w-4" />
+              <Plus className="size-4" />
               添加记录
             </Button>
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-2">
+        <div className="flex flex-col gap-2">
           {filteredGifts.map((gift) => (
             <Card
               key={gift.id}
@@ -368,9 +368,9 @@ export default function SocialGiftsPage() {
                     )}
                   >
                     {gift.type === 'give' ? (
-                      <ArrowUpRight className="h-5 w-5 text-expense" />
+                      <ArrowUpRight className="size-5 text-expense" />
                     ) : (
-                      <ArrowDownLeft className="h-5 w-5 text-income" />
+                      <ArrowDownLeft className="size-5 text-income" />
                     )}
                   </div>
 
@@ -417,7 +417,7 @@ export default function SocialGiftsPage() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8"
+                      className="size-8"
                       onClick={() => openEditDialog(gift)}
                     >
                       <Pencil className="h-3.5 w-3.5" />
@@ -425,7 +425,7 @@ export default function SocialGiftsPage() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8 text-destructive hover:text-destructive"
+                      className="size-8 text-destructive hover:text-destructive"
                       onClick={() => {
                         setDeletingId(gift.id);
                         setDeleteDialogOpen(true);
@@ -450,7 +450,7 @@ export default function SocialGiftsPage() {
             disabled={page <= 1}
             onClick={() => setPage((p) => p - 1)}
           >
-            <ChevronLeft className="h-4 w-4" />
+            <ChevronLeft className="size-4" />
           </Button>
           <span className="text-sm text-muted-foreground px-3 tabular-nums">
             {page} / {totalPages}
@@ -461,7 +461,7 @@ export default function SocialGiftsPage() {
             disabled={page >= totalPages}
             onClick={() => setPage((p) => p + 1)}
           >
-            <ChevronRight className="h-4 w-4" />
+            <ChevronRight className="size-4" />
           </Button>
         </div>
       )}
@@ -478,7 +478,7 @@ export default function SocialGiftsPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-2">
+          <div className="flex flex-col gap-4 py-2">
             {/* Type Toggle */}
             <div className="flex rounded-lg border p-1 gap-1">
               <button
@@ -626,7 +626,7 @@ export default function SocialGiftsPage() {
             </Button>
             <Button onClick={handleSubmit} disabled={submitting}>
               {submitting && (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="size-4 animate-spin" />
               )}
               {editingGift ? '保存' : '添加'}
             </Button>

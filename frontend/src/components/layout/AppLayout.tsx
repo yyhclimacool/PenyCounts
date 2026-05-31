@@ -16,6 +16,7 @@ import { ChatSidebar } from '@/components/chat/ChatSidebar';
 import { QuickChatInput } from '@/components/chat/QuickChatInput';
 import { useChatStore } from '@/stores/chatStore';
 import { useAuthStore } from '@/stores/authStore';
+import { useDataStore } from '@/stores/dataStore';
 import * as familyService from '@/services/family';
 import type { Family } from '@/types';
 
@@ -26,10 +27,11 @@ export function AppLayout() {
 
   const [families, setFamilies] = useState<Family[]>([]);
   const [switching, setSwitching] = useState(false);
+  const familiesRev = useDataStore((s) => s.familiesRev);
 
   useEffect(() => {
     familyService.listFamilies().then(setFamilies).catch(() => {});
-  }, []);
+  }, [familiesRev]);
 
   const currentFamily = families.find((f) => f.id === user?.default_family_id) ?? families[0];
 
@@ -62,7 +64,7 @@ export function AppLayout() {
               className="lg:hidden"
               onClick={() => setSidebarOpen(true)}
             >
-              <Menu className="h-5 w-5" />
+              <Menu className="size-5" />
             </Button>
 
             {families.length > 0 && (
@@ -73,7 +75,7 @@ export function AppLayout() {
               >
                 <SelectTrigger className="h-9 w-auto min-w-[120px] border-glass-border bg-muted/30 font-medium">
                   <div className="flex items-center gap-2">
-                    <Users className="h-4 w-4 text-primary" />
+                    <Users className="size-4 text-primary" />
                     <SelectValue placeholder="选择家庭" />
                   </div>
                 </SelectTrigger>
@@ -95,7 +97,7 @@ export function AppLayout() {
             className={cn(chatOpen && 'bg-muted')}
             title="AI 助手"
           >
-            <MessageSquare className="h-5 w-5" />
+            <MessageSquare className="size-5" />
           </Button>
         </header>
 

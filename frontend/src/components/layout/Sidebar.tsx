@@ -326,8 +326,8 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       >
         <div className="flex h-14 items-center justify-between border-b border-glass-border px-5">
           <NavLink to="/" className="flex items-center gap-2.5 group" onClick={onClose}>
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80 text-primary-foreground shadow-md shadow-primary/25 transition-transform group-hover:scale-105">
-              <Wallet className="h-5 w-5" />
+            <div className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80 text-primary-foreground shadow-md shadow-primary/25 transition-transform group-hover:scale-105">
+              <Wallet className="size-5" />
             </div>
             <span className="text-lg font-extrabold tracking-tight bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">
               PenyCounts
@@ -336,10 +336,10 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 lg:hidden text-sidebar-foreground"
+            className="size-8 lg:hidden text-sidebar-foreground"
             onClick={onClose}
           >
-            <X className="h-4 w-4" />
+            <X className="size-4" />
           </Button>
         </div>
 
@@ -389,10 +389,10 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               <img
                 src={user.avatar_url}
                 alt="头像"
-                className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-primary/10 group-hover:ring-primary/20 transition-all"
+                className="size-9 shrink-0 rounded-full object-cover ring-1 ring-primary/10 group-hover:ring-primary/20 transition-all"
               />
             ) : (
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary/15 to-primary/5 text-primary font-bold text-sm ring-1 ring-primary/10 group-hover:ring-primary/20 transition-all">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary/15 to-primary/5 text-primary font-bold text-sm ring-1 ring-primary/10 group-hover:ring-primary/20 transition-all">
                 {user?.nickname?.charAt(0)?.toUpperCase() ?? 'U'}
               </div>
             )}
@@ -404,7 +404,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                 {user?.username ?? ''}
               </p>
             </div>
-            <ChevronRight className="h-4 w-4 shrink-0 text-sidebar-foreground/25 group-hover:text-sidebar-foreground/50 transition-colors" />
+            <ChevronRight className="size-4 shrink-0 text-sidebar-foreground/25 group-hover:text-sidebar-foreground/50 transition-colors" />
           </button>
         </div>
       </aside>
@@ -417,7 +417,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             <DialogDescription>管理账户、AI 配置和家庭成员</DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-6 py-2">
+          <div className="flex flex-col gap-6 py-2">
             {/* ─ Profile Info ─ */}
             <div>
               <div className="flex items-center justify-between mb-3">
@@ -430,13 +430,13 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                     setNewPassword('');
                     setConfirmNewPassword('');
                   }}>
-                    <Pencil className="h-3 w-3" />
+                    <Pencil className="size-3" />
                     编辑
                   </Button>
                 )}
               </div>
               {user && !profileEditing && (
-                <div className="space-y-3">
+                <div className="flex flex-col gap-3">
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
@@ -448,18 +448,18 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                         <img
                           src={user.avatar_url}
                           alt="头像"
-                          className="h-12 w-12 rounded-full object-cover ring-2 ring-primary/10"
+                          className="size-12 rounded-full object-cover ring-2 ring-primary/10"
                         />
                       ) : (
-                        <div className="h-12 w-12 rounded-full bg-gradient-to-br from-primary/15 to-primary/5 flex items-center justify-center text-lg font-bold text-primary ring-2 ring-primary/10">
+                        <div className="size-12 rounded-full bg-gradient-to-br from-primary/15 to-primary/5 flex items-center justify-center text-lg font-bold text-primary ring-2 ring-primary/10">
                           {user.nickname?.charAt(0)?.toUpperCase() ?? 'U'}
                         </div>
                       )}
                       <div className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                         {avatarUploading ? (
-                          <Loader2 className="h-4 w-4 text-white animate-spin" />
+                          <Loader2 className="size-4 text-white animate-spin" />
                         ) : (
-                          <Camera className="h-4 w-4 text-white" />
+                          <Camera className="size-4 text-white" />
                         )}
                       </div>
                     </button>
@@ -478,7 +478,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                 </div>
               )}
               {user && profileEditing && (
-                <div className="space-y-3">
+                <div className="flex flex-col gap-3">
                   <div className="flex items-center gap-3 mb-1">
                     <button
                       type="button"
@@ -490,18 +490,18 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                         <img
                           src={user.avatar_url}
                           alt="头像"
-                          className="h-12 w-12 rounded-full object-cover ring-2 ring-primary/10"
+                          className="size-12 rounded-full object-cover ring-2 ring-primary/10"
                         />
                       ) : (
-                        <div className="h-12 w-12 rounded-full bg-gradient-to-br from-primary/15 to-primary/5 flex items-center justify-center text-lg font-bold text-primary ring-2 ring-primary/10">
+                        <div className="size-12 rounded-full bg-gradient-to-br from-primary/15 to-primary/5 flex items-center justify-center text-lg font-bold text-primary ring-2 ring-primary/10">
                           {user.nickname?.charAt(0)?.toUpperCase() ?? 'U'}
                         </div>
                       )}
                       <div className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                         {avatarUploading ? (
-                          <Loader2 className="h-4 w-4 text-white animate-spin" />
+                          <Loader2 className="size-4 text-white animate-spin" />
                         ) : (
-                          <Camera className="h-4 w-4 text-white" />
+                          <Camera className="size-4 text-white" />
                         )}
                       </div>
                     </button>
@@ -535,7 +535,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                   <div className="flex gap-2 pt-1">
                     <Button variant="outline" size="sm" className="h-8" onClick={() => setProfileEditing(false)} disabled={profileSaving}>取消</Button>
                     <Button size="sm" className="h-8" onClick={handleProfileSave} disabled={profileSaving}>
-                      {profileSaving && <Loader2 className="h-3 w-3 animate-spin" />}
+                      {profileSaving && <Loader2 className="size-3 animate-spin" />}
                       保存
                     </Button>
                   </div>
@@ -549,12 +549,12 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             <div>
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
-                  <Bot className="h-4 w-4 text-muted-foreground" />
+                  <Bot className="size-4 text-muted-foreground" />
                   <h3 className="text-sm font-semibold text-muted-foreground">AI 助手配置</h3>
                 </div>
                 {llmConfig && !llmEditing && (
                   <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setLlmEditing(true)}>
-                    <Pencil className="h-3 w-3" />
+                    <Pencil className="size-3" />
                     编辑
                   </Button>
                 )}
@@ -562,10 +562,10 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
               {loadingConfig ? (
                 <div className="flex justify-center py-6">
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  <Loader2 className="size-5 animate-spin text-muted-foreground" />
                 </div>
               ) : llmConfig && !llmEditing ? (
-                <div className="space-y-3">
+                <div className="flex flex-col gap-3">
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div>
                       <Label className="text-muted-foreground text-xs">提供商</Label>
@@ -592,12 +592,12 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                     </div>
                   </div>
                   <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handleTestConnection} disabled={testing || !llmConfig.api_url}>
-                    {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                    {testing ? <Loader2 className="size-3 animate-spin" /> : <Zap className="size-3" />}
                     测试连接
                   </Button>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="flex flex-col gap-3">
                   <div>
                     <Label className="text-xs">提供商</Label>
                     <Select value={llmForm.provider} onValueChange={(v) => setLlmForm((f) => ({ ...f, provider: v }))}>
@@ -633,7 +633,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                       </Button>
                     )}
                     <Button size="sm" className="h-8" onClick={handleSaveLlmConfig} disabled={llmSaving}>
-                      {llmSaving && <Loader2 className="h-3 w-3 animate-spin" />}
+                      {llmSaving && <Loader2 className="size-3 animate-spin" />}
                       保存
                     </Button>
                   </div>
@@ -647,34 +647,34 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             <div>
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
-                  <Users className="h-4 w-4 text-muted-foreground" />
+                  <Users className="size-4 text-muted-foreground" />
                   <h3 className="text-sm font-semibold text-muted-foreground">家庭成员</h3>
                 </div>
                 <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setEditingMember(null); setMemberName(''); setMemberDialogOpen(true); }}>
-                  <Plus className="h-3 w-3" />
+                  <Plus className="size-3" />
                   添加
                 </Button>
               </div>
 
               {loadingMembers ? (
                 <div className="flex justify-center py-4">
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  <Loader2 className="size-5 animate-spin text-muted-foreground" />
                 </div>
               ) : members.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">暂未添加家庭成员</p>
               ) : (
-                <div className="space-y-1.5">
+                <div className="flex flex-col gap-1.5">
                   {members.map((member) => (
                     <div key={member.id} className="flex items-center gap-2.5 py-2 px-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors">
-                      <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-xs font-semibold text-primary">
+                      <div className="size-7 rounded-full bg-primary/10 flex items-center justify-center text-xs font-semibold text-primary">
                         {member.name.charAt(0)}
                       </div>
                       <span className="flex-1 text-sm font-medium">{member.name}</span>
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditingMember(member); setMemberName(member.name); setMemberDialogOpen(true); }}>
-                        <Pencil className="h-3 w-3" />
+                      <Button variant="ghost" size="icon" className="size-7" onClick={() => { setEditingMember(member); setMemberName(member.name); setMemberDialogOpen(true); }}>
+                        <Pencil className="size-3" />
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => { setDeletingMember(member); setDeleteDialogOpen(true); }}>
-                        <Trash2 className="h-3 w-3" />
+                      <Button variant="ghost" size="icon" className="size-7 text-destructive hover:text-destructive" onClick={() => { setDeletingMember(member); setDeleteDialogOpen(true); }}>
+                        <Trash2 className="size-3" />
                       </Button>
                     </div>
                   ))}
@@ -686,7 +686,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
             {/* ─ Logout ─ */}
             <Button variant="outline" className="w-full text-destructive hover:text-destructive hover:bg-destructive/10 hover:border-destructive/30" onClick={logout}>
-              <LogOut className="h-4 w-4" />
+              <LogOut className="size-4" />
               退出登录
             </Button>
           </div>
@@ -707,7 +707,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           <DialogFooter>
             <Button variant="outline" onClick={() => setMemberDialogOpen(false)} disabled={memberSubmitting}>取消</Button>
             <Button onClick={handleMemberSubmit} disabled={memberSubmitting}>
-              {memberSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {memberSubmitting && <Loader2 className="size-4 animate-spin" />}
               {editingMember ? '保存' : '添加'}
             </Button>
           </DialogFooter>

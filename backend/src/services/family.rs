@@ -259,6 +259,41 @@ pub async fn regenerate_invite_code(
     Ok(new_code)
 }
 
+pub async fn delete_family(
+    pool: &PgPool,
+    user_id: Uuid,
+    family_id: Uuid,
+) -> Result<(), AppError> {
+    let role = sqlx::query_as::<_, (String,)>(
+        "SELECT role FROM family_members WHERE family_id = $1 AND user_id = $2",
+    )
+    .bind(family_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("您不是该家庭成员".into()))?;
+
+    if role.0 != "owner" {
+        return Err(AppError::BadRequest("只有家庭创建者可以删除家庭".into()));
+    }
+
+    let default: (Uuid,) = sqlx::query_as("SELECT default_family_id FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
+
+    if default.0 == family_id {
+        return Err(AppError::BadRequest("不能删除默认家庭，请先切换默认家庭".into()));
+    }
+
+    sqlx::query("DELETE FROM families WHERE id = $1")
+        .bind(family_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
 pub async fn create_default_family(pool: &PgPool, user_id: Uuid) -> Result<Uuid, AppError> {
     let family_id = Uuid::new_v4();
     let code = generate_invite_code();

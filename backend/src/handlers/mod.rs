@@ -40,7 +40,8 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
 
     let state = AppState { pool, config };
 
-    Router::new()
+    // API routes with compression
+    let api_routes = Router::new()
         // Auth (public)
         .route("/api/auth/register", axum::routing::post(auth::register))
         .route("/api/auth/login", axum::routing::post(auth::login))
@@ -148,7 +149,7 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
             "/api/stats/yearly-trend",
             axum::routing::get(stats::yearly_trend),
         )
-        // AI
+        // AI (non-streaming)
         .route(
             "/api/ai/config",
             axum::routing::get(ai::get_active_config).put(ai::upsert_config),
@@ -165,7 +166,6 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
             "/api/ai/configs/{id}/activate",
             axum::routing::post(ai::activate_config),
         )
-        .route("/api/ai/chat", axum::routing::post(ai::chat))
         .route("/api/ai/test-connection", axum::routing::post(ai::test_connection))
         .route(
             "/api/ai/chat/history",
@@ -186,7 +186,8 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
         )
         .route(
             "/api/families/{id}",
-            axum::routing::get(family::get_family_detail),
+            axum::routing::get(family::get_family_detail)
+                .delete(family::delete_family),
         )
         .route(
             "/api/families/{id}/leave",
@@ -198,7 +199,15 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
         )
         // Health
         .route("/api/health", axum::routing::get(health))
-        .layer(CompressionLayer::new().br(true).gzip(true))
+        .layer(CompressionLayer::new().br(true).gzip(true));
+
+    // SSE route — no compression (buffering breaks streaming)
+    let sse_routes = Router::new()
+        .route("/api/ai/chat", axum::routing::post(ai::chat));
+
+    Router::new()
+        .merge(api_routes)
+        .merge(sse_routes)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|_req: &axum::http::Request<_>| {

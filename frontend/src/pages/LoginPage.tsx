@@ -64,8 +64,8 @@ export default function LoginPage() {
 
       <div className="relative z-10 w-full max-w-md animate-slide-up">
         <div className="mb-8 flex flex-col items-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-primary/80 text-primary-foreground shadow-lg shadow-primary/30 transition-transform hover:scale-105">
-            <Wallet className="h-7 w-7" />
+          <div className="flex size-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-primary/80 text-primary-foreground shadow-lg shadow-primary/30 transition-transform hover:scale-105">
+            <Wallet className="size-7" />
           </div>
           <h1 className="mt-4 text-2xl font-extrabold tracking-tight bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">PenyCounts</h1>
           <p className="mt-1 text-sm text-muted-foreground font-medium">智能家庭记账助手</p>
@@ -78,14 +78,14 @@ export default function LoginPage() {
           </CardHeader>
 
           <form onSubmit={handleSubmit}>
-            <CardContent className="space-y-4">
+            <CardContent className="flex flex-col gap-4">
               {error && (
                 <div className="rounded-lg bg-destructive/10 px-4 py-3 text-sm text-destructive">
                   {error}
                 </div>
               )}
 
-              <div className="space-y-2">
+              <div className="flex flex-col gap-2">
                 <Label htmlFor="username">用户名</Label>
                 <Input
                   id="username"
@@ -99,7 +99,7 @@ export default function LoginPage() {
                 />
               </div>
 
-              <div className="space-y-2">
+              <div className="flex flex-col gap-2">
                 <Label htmlFor="password">密码</Label>
                 <Input
                   id="password"
@@ -115,7 +115,7 @@ export default function LoginPage() {
 
             <CardFooter className="flex flex-col gap-4">
               <Button type="submit" className="w-full" disabled={loading}>
-                {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+                {loading && <Loader2 className="size-4 animate-spin" />}
                 登录
               </Button>
 

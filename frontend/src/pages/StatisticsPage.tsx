@@ -33,6 +33,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import * as statsService from '@/services/stats';
+import { useDataStore } from '@/stores/dataStore';
 import type {
   MonthlyTrend,
   CategoryBreakdown,
@@ -100,10 +101,10 @@ function YearSelector({
       <Button
         variant="ghost"
         size="icon"
-        className="h-8 w-8"
+        className="size-8"
         onClick={() => onChange(year - 1)}
       >
-        <ChevronLeft className="h-4 w-4" />
+        <ChevronLeft className="size-4" />
       </Button>
       <span className="text-base font-semibold w-16 text-center tabular-nums">
         {year}年
@@ -111,11 +112,11 @@ function YearSelector({
       <Button
         variant="ghost"
         size="icon"
-        className="h-8 w-8"
+        className="size-8"
         onClick={() => onChange(year + 1)}
         disabled={year >= dayjs().year()}
       >
-        <ChevronRight className="h-4 w-4" />
+        <ChevronRight className="size-4" />
       </Button>
     </div>
   );
@@ -150,7 +151,7 @@ function MonthSelect({
 function Spinner() {
   return (
     <div className="flex items-center justify-center py-20">
-      <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      <Loader2 className="size-8 animate-spin text-primary" />
     </div>
   );
 }
@@ -158,7 +159,7 @@ function Spinner() {
 function EmptyState({ message = '暂无数据' }: { message?: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-      <BarChart3 className="h-12 w-12 mb-3 opacity-30" />
+      <BarChart3 className="size-12 mb-3 opacity-30" />
       <p className="text-sm">{message}</p>
     </div>
   );
@@ -208,6 +209,7 @@ function TypeToggle({
 function OverviewTab() {
   const currentYear = dayjs().year();
   const currentMonth = dayjs().month() + 1;
+  const transactionsRev = useDataStore((s) => s.transactionsRev);
 
   const [year, setYear] = useState(currentYear);
   const [viewType, setViewType] = useState<'all' | 'expense' | 'income'>('all');
@@ -230,7 +232,7 @@ function OverviewTab() {
       .catch(() => !cancelled && setMonthlyData([]))
       .finally(() => !cancelled && setMonthlyLoading(false));
     return () => { cancelled = true; };
-  }, [year]);
+  }, [year, transactionsRev]);
 
   useEffect(() => {
     let cancelled = false;
@@ -242,7 +244,7 @@ function OverviewTab() {
       .catch(() => !cancelled && setDailyData([]))
       .finally(() => !cancelled && setDailyLoading(false));
     return () => { cancelled = true; };
-  }, [year, selectedMonth]);
+  }, [year, selectedMonth, transactionsRev]);
 
   useEffect(() => {
     let cancelled = false;
@@ -253,7 +255,7 @@ function OverviewTab() {
       .catch(() => !cancelled && setYearlyData([]))
       .finally(() => !cancelled && setYearlyLoading(false));
     return () => { cancelled = true; };
-  }, []);
+  }, [transactionsRev]);
 
   const showIncome = viewType === 'all' || viewType === 'income';
   const showExpense = viewType === 'all' || viewType === 'expense';
@@ -460,16 +462,16 @@ function OverviewTab() {
   }, [yearlyChartData, showIncome, showExpense]);
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center gap-3 justify-between">
         <YearSelector year={year} onChange={setYear} />
         <TypeToggle value={viewType} onChange={setViewType} />
       </div>
 
       {/* Monthly Trend */}
-      <div className="space-y-4">
+      <div className="flex flex-col gap-4">
         <h2 className="text-base font-semibold flex items-center gap-2">
-          <CalendarDays className="h-4 w-4 text-primary" />
+          <CalendarDays className="size-4 text-primary" />
           每月趋势
         </h2>
 
@@ -494,7 +496,7 @@ function OverviewTab() {
                 <CardContent className="p-5">
                   <div className="flex items-center gap-3 mb-2">
                     <div className="p-2 bg-income/10 rounded-lg">
-                      <TrendingUp className="h-4 w-4 text-income" />
+                      <TrendingUp className="size-4 text-income" />
                     </div>
                     <span className="text-sm text-muted-foreground">年度总收入</span>
                   </div>
@@ -507,7 +509,7 @@ function OverviewTab() {
                 <CardContent className="p-5">
                   <div className="flex items-center gap-3 mb-2">
                     <div className="p-2 bg-expense/10 rounded-lg">
-                      <TrendingDown className="h-4 w-4 text-expense" />
+                      <TrendingDown className="size-4 text-expense" />
                     </div>
                     <span className="text-sm text-muted-foreground">年度总支出</span>
                   </div>
@@ -520,7 +522,7 @@ function OverviewTab() {
                 <CardContent className="p-5">
                   <div className="flex items-center gap-3 mb-2">
                     <div className="p-2 bg-primary/10 rounded-lg">
-                      <PiggyBank className="h-4 w-4 text-primary" />
+                      <PiggyBank className="size-4 text-primary" />
                     </div>
                     <span className="text-sm text-muted-foreground">储蓄率</span>
                   </div>
@@ -538,10 +540,10 @@ function OverviewTab() {
       </div>
 
       {/* Daily Trend */}
-      <div className="space-y-4">
+      <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold flex items-center gap-2">
-            <CalendarDays className="h-4 w-4 text-primary" />
+            <CalendarDays className="size-4 text-primary" />
             日趋势
           </h2>
           <MonthSelect value={selectedMonth} onChange={setSelectedMonth} allowAll={false} />
@@ -586,9 +588,9 @@ function OverviewTab() {
       </div>
 
       {/* Yearly Trend */}
-      <div className="space-y-4">
+      <div className="flex flex-col gap-4">
         <h2 className="text-base font-semibold flex items-center gap-2">
-          <CalendarDays className="h-4 w-4 text-primary" />
+          <CalendarDays className="size-4 text-primary" />
           年度趋势
         </h2>
 
@@ -622,6 +624,7 @@ function CategoryBreakdownTab() {
   const [type, setType] = useState<'expense' | 'income'>('expense');
   const [data, setData] = useState<CategoryBreakdown[]>([]);
   const [loading, setLoading] = useState(true);
+  const transactionsRev = useDataStore((s) => s.transactionsRev);
 
   useEffect(() => {
     let cancelled = false;
@@ -636,7 +639,7 @@ function CategoryBreakdownTab() {
       .catch(() => !cancelled && setData([]))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, [year, month, type]);
+  }, [year, month, type, transactionsRev]);
 
   const sorted = [...data].sort(
     (a, b) => parseFloat(b.total) - parseFloat(a.total),
@@ -657,40 +660,32 @@ function CategoryBreakdownTab() {
   const pieOption = useMemo((): echarts.EChartsCoreOption => ({
     tooltip: {
       trigger: 'item',
-      ...TOOLTIP_STYLE,
+      formatter: '{b} : {c} ({d}%)',
     },
     legend: {
+      type: 'scroll',
       orient: 'vertical',
-      left: '55%',
-      top: 'center',
-      icon: 'circle',
-      itemWidth: 10,
-      itemHeight: 10,
-      textStyle: { fontSize: 12 },
-      formatter: (name: string) => {
-        const item = pieData.find((d) => d.name === name);
-        if (!item) return name;
-        return `${name}  ${item.percentage.toFixed(1)}%`;
-      },
+      right: 10,
+      top: 20,
+      bottom: 20,
     },
     series: [
       {
         type: 'pie',
-        radius: ['40%', '70%'],
-        center: ['28%', '50%'],
-        avoidLabelOverlap: false,
+        radius: '55%',
+        center: ['40%', '50%'],
         data: pieData.map((d, i) => ({
           name: d.name,
           value: d.value,
           itemStyle: { color: CATEGORY_PALETTE[i % CATEGORY_PALETTE.length] },
         })),
-        label: { show: false },
         emphasis: {
-          label: { show: true, fontSize: 14, fontWeight: 'bold' },
-          itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.2)' },
+          itemStyle: {
+            shadowBlur: 10,
+            shadowOffsetX: 0,
+            shadowColor: 'rgba(0, 0, 0, 0.5)',
+          },
         },
-        labelLine: { show: false },
-        itemStyle: { borderRadius: 10, borderColor: '#fff', borderWidth: 2 },
       },
     ],
   }), [pieData]);
@@ -741,7 +736,7 @@ function CategoryBreakdownTab() {
   }), [barData]);
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <YearSelector year={year} onChange={setYear} />
         <MonthSelect value={month} onChange={setMonth} />
@@ -815,6 +810,7 @@ function MemberAnalysisTab() {
   const [viewType, setViewType] = useState<'all' | 'expense' | 'income'>('all');
   const [data, setData] = useState<MemberBreakdown[]>([]);
   const [loading, setLoading] = useState(true);
+  const transactionsRev = useDataStore((s) => s.transactionsRev);
 
   useEffect(() => {
     let cancelled = false;
@@ -829,7 +825,7 @@ function MemberAnalysisTab() {
       .catch(() => !cancelled && setData([]))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, [year, month, viewType]);
+  }, [year, month, viewType, transactionsRev]);
 
   const sorted = [...data].sort(
     (a, b) => parseFloat(b.total) - parseFloat(a.total),
@@ -908,7 +904,7 @@ function MemberAnalysisTab() {
   }, [barData, barColor, viewType]);
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3 justify-between">
         <div className="flex items-center gap-3">
           <YearSelector year={year} onChange={setYear} />
@@ -945,6 +941,7 @@ function SocialGiftsTab() {
   const [viewType, setViewType] = useState<'all' | 'expense' | 'income'>('all');
   const [data, setData] = useState<SocialSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const transactionsRev = useDataStore((s) => s.transactionsRev);
 
   useEffect(() => {
     let cancelled = false;
@@ -955,7 +952,7 @@ function SocialGiftsTab() {
       .catch(() => !cancelled && setData([]))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, [year]);
+  }, [year, transactionsRev]);
 
   const showGiven = viewType === 'all' || viewType === 'expense';
   const showReceived = viewType === 'all' || viewType === 'income';
@@ -1021,7 +1018,7 @@ function SocialGiftsTab() {
   }, [chartData, showGiven, showReceived]);
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3 justify-between">
         <YearSelector year={year} onChange={setYear} />
         <TypeToggle value={viewType} onChange={setViewType} />
@@ -1141,7 +1138,7 @@ function SocialGiftsTab() {
 
 export default function StatisticsPage() {
   return (
-    <div className="space-y-6 p-4 sm:p-6 max-w-5xl mx-auto">
+    <div className="flex flex-col gap-6 p-4 sm:p-6 max-w-5xl mx-auto">
       <h1 className="text-2xl font-bold tracking-tight">统计分析</h1>
 
       <Tabs defaultValue="overview">

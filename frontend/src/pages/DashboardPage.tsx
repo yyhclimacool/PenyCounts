@@ -26,6 +26,7 @@ import {
 import { Button } from '@/components/ui/button';
 import * as statsService from '@/services/stats';
 import * as transactionsService from '@/services/transactions';
+import { useDataStore } from '@/stores/dataStore';
 import type { MonthlyTrend, DailyTrend, CategoryBreakdown, Transaction } from '@/types';
 import { formatCurrency, formatDate } from '@/utils/format';
 import { cn } from '@/utils/cn';
@@ -58,6 +59,7 @@ export default function DashboardPage() {
   const [dailyData, setDailyData] = useState<DailyTrend[]>([]);
   const [categoryData, setCategoryData] = useState<CategoryBreakdown[]>([]);
   const [recentTx, setRecentTx] = useState<Transaction[]>([]);
+  const transactionsRev = useDataStore((s) => s.transactionsRev);
 
   useEffect(() => {
     setLoading(true);
@@ -74,7 +76,7 @@ export default function DashboardPage() {
         setRecentTx(txData.data);
       })
       .finally(() => setLoading(false));
-  }, [year, month]);
+  }, [year, month, transactionsRev]);
 
   const currentMonthData = trend.find((t) => t.month === month);
   const totalIncome = parseFloat(currentMonthData?.income ?? '0');
@@ -180,42 +182,32 @@ export default function DashboardPage() {
   const pieChartOption = useMemo((): echarts.EChartsCoreOption => ({
     tooltip: {
       trigger: 'item',
-      backgroundColor: 'rgba(255,255,255,0.96)',
-      borderColor: '#e5e7eb',
-      textStyle: { color: '#1f2937', fontSize: 12 },
+      formatter: '{b} : {c} ({d}%)',
     },
     legend: {
+      type: 'scroll',
       orient: 'vertical',
-      left: '55%',
-      top: 'center',
-      icon: 'circle',
-      itemWidth: 10,
-      itemHeight: 10,
-      textStyle: { fontSize: 12 },
-      formatter: (name: string) => {
-        const item = pieData.find((d) => d.name === name);
-        if (!item) return name;
-        return `${name}  ${item.percentage.toFixed(1)}%`;
-      },
+      right: 10,
+      top: 20,
+      bottom: 20,
     },
     series: [
       {
         type: 'pie',
-        radius: ['40%', '70%'],
-        center: ['28%', '50%'],
-        avoidLabelOverlap: false,
+        radius: '55%',
+        center: ['40%', '50%'],
         data: pieData.map((d, i) => ({
           name: d.name,
           value: d.value,
           itemStyle: { color: CATEGORY_PALETTE[i % CATEGORY_PALETTE.length] },
         })),
-        label: { show: false },
         emphasis: {
-          label: { show: true, fontSize: 14, fontWeight: 'bold' },
-          itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.2)' },
+          itemStyle: {
+            shadowBlur: 10,
+            shadowOffsetX: 0,
+            shadowColor: 'rgba(0, 0, 0, 0.5)',
+          },
         },
-        labelLine: { show: false },
-        itemStyle: { borderRadius: 10, borderColor: '#fff', borderWidth: 2 },
       },
     ],
   }), [pieData]);
@@ -236,19 +228,19 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <Loader2 className="size-8 animate-spin text-primary" />
       </div>
     );
   }
 
   return (
-    <div className="space-y-6 p-4 sm:p-6 max-w-5xl mx-auto relative min-h-screen pb-24">
+    <div className="flex flex-col gap-6 p-4 sm:p-6 max-w-5xl mx-auto relative min-h-screen pb-24">
       {/* Header with month navigation */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight">月度概览</h1>
         <div className="inline-flex items-center gap-1">
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={goPrev}>
-            <ChevronLeft className="h-4 w-4" />
+          <Button variant="ghost" size="icon" className="size-8" onClick={goPrev}>
+            <ChevronLeft className="size-4" />
           </Button>
           <span className="text-base font-semibold w-24 text-center tabular-nums">
             {year}年{month}月
@@ -256,11 +248,11 @@ export default function DashboardPage() {
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8"
+            className="size-8"
             onClick={goNext}
             disabled={isCurrentMonth}
           >
-            <ChevronRight className="h-4 w-4" />
+            <ChevronRight className="size-4" />
           </Button>
         </div>
       </div>
@@ -271,7 +263,7 @@ export default function DashboardPage() {
           <CardContent className="p-5">
             <div className="flex items-center gap-2.5 mb-2">
               <div className="p-2 bg-income/10 rounded-lg">
-                <TrendingUp className="h-4 w-4 text-income" />
+                <TrendingUp className="size-4 text-income" />
               </div>
               <span className="text-xs text-muted-foreground">收入</span>
             </div>
@@ -285,7 +277,7 @@ export default function DashboardPage() {
           <CardContent className="p-5">
             <div className="flex items-center gap-2.5 mb-2">
               <div className="p-2 bg-expense/10 rounded-lg">
-                <TrendingDown className="h-4 w-4 text-expense" />
+                <TrendingDown className="size-4 text-expense" />
               </div>
               <span className="text-xs text-muted-foreground">支出</span>
             </div>
@@ -299,7 +291,7 @@ export default function DashboardPage() {
           <CardContent className="p-5">
             <div className="flex items-center gap-2.5 mb-2">
               <div className="p-2 bg-primary/10 rounded-lg">
-                <Wallet className="h-4 w-4 text-primary" />
+                <Wallet className="size-4 text-primary" />
               </div>
               <span className="text-xs text-muted-foreground">结余</span>
             </div>
@@ -316,7 +308,7 @@ export default function DashboardPage() {
           <CardContent className="p-5">
             <div className="flex items-center gap-2.5 mb-2">
               <div className="p-2 bg-primary/10 rounded-lg">
-                <BarChart3 className="h-4 w-4 text-primary" />
+                <BarChart3 className="size-4 text-primary" />
               </div>
               <span className="text-xs text-muted-foreground">月度同比</span>
             </div>
@@ -339,14 +331,14 @@ export default function DashboardPage() {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2">
-            <CalendarDays className="h-4 w-4 text-primary" />
+            <CalendarDays className="size-4 text-primary" />
             日支出趋势
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-2">
           {dailyChartData.every((d) => d.income === 0 && d.expense === 0) ? (
             <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-              <BarChart3 className="h-10 w-10 mb-2 opacity-30" />
+              <BarChart3 className="size-10 mb-2 opacity-30" />
               <p className="text-sm">暂无数据</p>
             </div>
           ) : (
@@ -369,7 +361,7 @@ export default function DashboardPage() {
           <CardContent>
             {pieData.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                <BarChart3 className="h-10 w-10 mb-2 opacity-30" />
+                <BarChart3 className="size-10 mb-2 opacity-30" />
                 <p className="text-sm">暂无支出数据</p>
               </div>
             ) : (
@@ -393,13 +385,13 @@ export default function DashboardPage() {
               className="text-muted-foreground hover:text-foreground"
             >
               查看全部
-              <ArrowRight className="h-4 w-4 ml-1" />
+              <ArrowRight className="size-4 ml-1" />
             </Button>
           </CardHeader>
           <CardContent>
             {recentTx.length === 0 ? (
               <div className="flex flex-col items-center py-12 text-muted-foreground">
-                <ReceiptText className="h-10 w-10 mb-2 opacity-40" />
+                <ReceiptText className="size-10 mb-2 opacity-40" />
                 <p className="text-sm">暂无交易记录</p>
                 <Button
                   variant="outline"
@@ -407,19 +399,19 @@ export default function DashboardPage() {
                   className="mt-3"
                   onClick={() => navigate('/transactions?add=true')}
                 >
-                  <Plus className="h-4 w-4" />
+                  <Plus className="size-4" />
                   添加第一笔
                 </Button>
               </div>
             ) : (
-              <div className="space-y-0.5">
+              <div className="flex flex-col gap-0.5">
                 {recentTx.map((tx) => (
                   <div
                     key={tx.id}
                     className="flex items-center gap-3 py-2.5 px-2 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
                     onClick={() => navigate('/transactions')}
                   >
-                    <span className="text-lg w-8 h-8 flex items-center justify-center rounded-lg bg-muted/60 shrink-0">
+                    <span className="text-lg size-8 flex items-center justify-center rounded-lg bg-muted/60 shrink-0">
                       {tx.category?.icon ?? '📝'}
                     </span>
                     <div className="flex-1 min-w-0">
@@ -433,7 +425,7 @@ export default function DashboardPage() {
                         <span>{formatDate(tx.date)}</span>
                         {tx.location && (
                           <span className="inline-flex items-center gap-0.5">
-                            <MapPin className="h-3 w-3" />
+                            <MapPin className="size-3" />
                             {tx.location}
                           </span>
                         )}
