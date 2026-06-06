@@ -152,12 +152,12 @@ pub async fn test_llm_connection(
         "messages": [
             { "role": "user", "content": "Hi, reply with one word to confirm you are working." }
         ],
-        "max_tokens": 20,
+        "max_tokens": 512,
         "stream": false,
     });
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| format!("创建请求客户端失败: {}", e))?;
 
@@ -177,7 +177,7 @@ pub async fn test_llm_connection(
         .await
         .map_err(|e| {
             if e.is_timeout() {
-                "请求超时（15秒），请检查 API 地址是否可访问".to_string()
+                "请求超时（60秒），请检查 API 地址是否可访问".to_string()
             } else if e.is_connect() {
                 format!("无法连接到 {}，请检查地址是否正确", api_url)
             } else {
@@ -196,16 +196,22 @@ pub async fn test_llm_connection(
         .await
         .map_err(|e| format!("解析响应失败: {}", e))?;
 
-    let reply = body["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let message = &body["choices"][0]["message"];
+    let reply = message["content"].as_str().unwrap_or("").trim().to_string();
 
-    if reply.is_empty() {
-        return Err("模型返回了空响应，请检查模型名称是否正确".to_string());
+    if !reply.is_empty() {
+        return Ok(reply);
     }
 
-    Ok(reply)
+    // Reasoning models (DeepSeek R1, Gemma thinking, etc.) may put their output
+    // in `reasoning_content` and leave `content` empty. If reasoning is present,
+    // the model is reachable and working — treat it as a successful test.
+    let reasoning = message["reasoning_content"].as_str().unwrap_or("").trim();
+    if !reasoning.is_empty() {
+        return Ok("连接成功（推理模型）".to_string());
+    }
+
+    Err("模型返回了空响应，请检查模型名称是否正确".to_string())
 }
 
 // ── Chat with streaming ──────────────────────────────────────────────
@@ -339,7 +345,11 @@ pub async fn chat_stream(
          3. 你可以在一次对话中连续调用多个工具（如先查后删）\n\
          4. 删除和修改操作前，如果不确定是哪条记录，先查询确认\n\
          5. 查询时间范围：「最近一个月」从 {one_month_ago} 到 {today}，「本月」从本月1号到今天\n\
-         6. 成功操作后用简洁格式确认结果",
+         6. 成功操作后用简洁格式确认结果\n\
+         7. **严格遵守用户指定的时间范围**：用户问「4月份」就只查 2026-04-01 至 2026-04-30，绝不要自行扩大到全年或其它区间。即使该范围数据较少或为空，也只基于该范围作答（没有就如实说「该时间段没有记录」）\n\
+         8. 问「最大/最贵/最高的 N 笔」时，调用 query_transactions 并设置 sort_by=amount_desc、limit=N，直接用返回的前 N 条作答，不要再调别的工具\n\
+         9. **一旦某次工具结果已经能回答用户的问题，就立即用中文文字作答，不要用不同/更大的范围重复查询**\n\
+         10. **回复排版用规范 Markdown**：列举多条时务必每条独占一行；有序列表写成「1. 内容」（数字、点、空格，再接内容），各条之间用换行分隔，绝不要把 1.2.3. 挤在同一行；金额、要点可用 **加粗** 突出",
         now = now.format("%Y-%m-%d %H:%M:%S"),
         category_list = category_list.trim(),
         member_list = member_list,
@@ -423,19 +433,19 @@ pub async fn chat_stream(
             "type": "function",
             "function": {
                 "name": "query_transactions",
-                "description": "查询用户的交易记录。用于回答用户关于消费统计、支出分析等问题。返回指定时间范围内的交易明细。",
+                "description": "查询用户的交易记录。用于回答用户关于消费统计、支出分析等问题。返回指定时间范围内的交易明细。当用户问「最大/最贵/最高的N笔」时，务必设置 sort_by=amount_desc 并用 limit 限定条数。",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "start_date": {
                             "type": "string",
                             "format": "date",
-                            "description": "查询起始日期（含），格式 YYYY-MM-DD"
+                            "description": "查询起始日期（含），格式 YYYY-MM-DD。严格按用户指定的范围，不要自行扩大。"
                         },
                         "end_date": {
                             "type": "string",
                             "format": "date",
-                            "description": "查询结束日期（含），格式 YYYY-MM-DD"
+                            "description": "查询结束日期（含），格式 YYYY-MM-DD。严格按用户指定的范围，不要自行扩大。"
                         },
                         "type": {
                             "type": "string",
@@ -449,6 +459,15 @@ pub async fn chat_stream(
                         "member_name": {
                             "type": "string",
                             "description": "筛选涉及的成员姓名（可选）"
+                        },
+                        "sort_by": {
+                            "type": "string",
+                            "enum": ["date_desc", "amount_desc"],
+                            "description": "排序方式（可选）: date_desc=按日期倒序(默认), amount_desc=按金额从大到小。问「最大/最贵的N笔」时用 amount_desc。"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "最多返回多少条记录（可选，默认100，最大200）。问「最大的3笔」时设为3。"
                         }
                     },
                     "required": ["start_date", "end_date"]
@@ -638,15 +657,27 @@ pub async fn chat_stream(
         let client = reqwest::Client::new();
         let mut full_response = String::new();
 
-        for iteration in 0..MAX_ITERATIONS {
-            tracing::debug!(iteration, "agent loop: starting iteration");
+        // Loop guard: weak models often re-issue the *same* tool call repeatedly
+        // and never converge. We cache executed signatures so duplicates don't
+        // re-hit the DB, and once a duplicate is seen we force the model to
+        // answer in plain text (tool_choice = none) on the next turn.
+        let mut executed_signatures: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut force_final = false;
 
-            let request_body = serde_json::json!({
+        for iteration in 0..MAX_ITERATIONS {
+            tracing::debug!(iteration, force_final, "agent loop: starting iteration");
+
+            let mut request_body = serde_json::json!({
                 "model": model_name,
                 "messages": messages,
                 "stream": true,
                 "tools": tools,
             });
+            if force_final {
+                // Stop offering tools so the model produces a textual answer
+                // from the results it already gathered.
+                request_body["tool_choice"] = serde_json::json!("none");
+            }
 
             let response = match client
                 .post(&api_url)
@@ -760,6 +791,17 @@ pub async fn chat_stream(
                 break;
             }
 
+            // The model ignored tool_choice=none and is still looping on tools
+            // it already ran. Stop here to avoid burning iterations / hanging.
+            if force_final
+                && tool_calls
+                    .iter()
+                    .all(|(_, name, args)| executed_signatures.contains(&format!("{}|{}", name, args)))
+            {
+                tracing::warn!(iteration, "agent loop: model stuck repeating tool calls, breaking");
+                break;
+            }
+
             tracing::debug!(iteration, count = tool_calls.len(), "agent loop: executing tool calls");
 
             // Build assistant message with tool_calls for message history
@@ -780,6 +822,21 @@ pub async fn chat_stream(
 
             // Execute each tool call and append results
             for (tc_id, tc_name, tc_args) in &tool_calls {
+                let signature = format!("{}|{}", tc_name, tc_args);
+
+                // Duplicate call: don't re-query the DB, just nudge the model to
+                // answer from what it already has. Forces convergence next turn.
+                if !executed_signatures.insert(signature) {
+                    tracing::warn!(tool = %tc_name, args = %tc_args, "agent loop: duplicate tool call, skipping execution");
+                    force_final = true;
+                    messages.push(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": "（已用相同条件查询过，结果见上文。请不要再调用工具，直接根据上面的数据用中文回答用户的问题。）",
+                    }));
+                    continue;
+                }
+
                 tracing::debug!(tool = %tc_name, args = %tc_args, "agent loop: executing tool");
 
                 let (result_content, is_success) = match tc_name.as_str() {
@@ -1075,21 +1132,67 @@ async fn execute_query_transactions(
         None
     };
 
-    let filter = crate::models::TransactionFilter {
-        start_date: Some(start_date),
-        end_date: Some(end_date),
-        category_id,
-        subcategory_id: None,
-        r#type: txn_type,
-        search: None,
-        member_name,
-        min_amount: None,
-        max_amount: None,
-        page: Some(1),
-        per_page: Some(100),
+    let sort_by = args["sort_by"].as_str().unwrap_or("date_desc");
+    let limit_n: i64 = args["limit"].as_i64().unwrap_or(100).clamp(1, 200);
+
+    // order_clause is chosen from a fixed allow-list (no user input) → injection-safe
+    let order_clause = match sort_by {
+        "amount_desc" => "ORDER BY t.amount DESC, t.date DESC, t.id",
+        _ => "ORDER BY t.date DESC, t.time DESC, t.id",
     };
 
-    let result = transaction::list_transactions(pool, family_id, filter)
+    // Aggregate over the FULL filtered range (independent of the row limit), so
+    // totals stay correct even when we only return the top-N detail rows.
+    let agg: (i64, Decimal, Decimal) = sqlx::query_as(
+        "SELECT
+            COUNT(*)::bigint,
+            COALESCE(SUM(t.amount) FILTER (WHERE t.type = 'income'), 0),
+            COALESCE(SUM(t.amount) FILTER (WHERE t.type = 'expense'), 0)
+         FROM transactions t
+         WHERE t.family_id = $1
+           AND t.date >= $2 AND t.date <= $3
+           AND ($4::uuid IS NULL OR t.category_id = $4)
+           AND ($5::text IS NULL OR t.type = $5)
+           AND ($6::text IS NULL OR EXISTS (
+                SELECT 1 FROM transaction_members tm
+                WHERE tm.transaction_id = t.id AND tm.member_name = $6))",
+    )
+    .bind(family_id)
+    .bind(start_date)
+    .bind(end_date)
+    .bind(category_id)
+    .bind(&txn_type)
+    .bind(&member_name)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("查询交易失败: {}", e))?;
+
+    let total_count = agg.0;
+    let total_income = agg.1;
+    let total_expense = agg.2;
+
+    let detail_sql = format!(
+        "SELECT t.* FROM transactions t
+         WHERE t.family_id = $1
+           AND t.date >= $2 AND t.date <= $3
+           AND ($4::uuid IS NULL OR t.category_id = $4)
+           AND ($5::text IS NULL OR t.type = $5)
+           AND ($6::text IS NULL OR EXISTS (
+                SELECT 1 FROM transaction_members tm
+                WHERE tm.transaction_id = t.id AND tm.member_name = $6))
+         {order_clause}
+         LIMIT $7"
+    );
+
+    let rows = sqlx::query_as::<_, crate::models::Transaction>(&detail_sql)
+        .bind(family_id)
+        .bind(start_date)
+        .bind(end_date)
+        .bind(category_id)
+        .bind(&txn_type)
+        .bind(&member_name)
+        .bind(limit_n)
+        .fetch_all(pool)
         .await
         .map_err(|e| format!("查询交易失败: {}", e))?;
 
@@ -1105,17 +1208,8 @@ async fn execute_query_transactions(
     .map(|c| (c.id, c.name))
     .collect();
 
-    // Format results
-    let mut total_income = Decimal::ZERO;
-    let mut total_expense = Decimal::ZERO;
     let mut lines = Vec::new();
-
-    for txn in &result.data {
-        if txn.r#type == "income" {
-            total_income += txn.amount;
-        } else {
-            total_expense += txn.amount;
-        }
+    for txn in &rows {
         let cat_name = cat_map.get(&txn.category_id).map(|s| s.as_str()).unwrap_or("未知");
         let type_mark = if txn.r#type == "income" { "+" } else { "-" };
         let note_part = txn.note.as_deref().unwrap_or("");
@@ -1131,15 +1225,28 @@ async fn execute_query_transactions(
         ));
     }
 
+    let sort_label = if sort_by == "amount_desc" { "按金额从大到小" } else { "按日期倒序" };
+    let truncated_note = if total_count > rows.len() as i64 {
+        format!(
+            "\n\n（注意：该范围共 {} 条记录，以上仅{}返回前 {} 条。如需完整统计请改用 get_statistics，或缩小时间范围。）",
+            total_count, sort_label, rows.len()
+        )
+    } else {
+        String::new()
+    };
+
     let summary = format!(
-        "查询结果（{} 至 {}）:\n总计 {} 条记录\n总收入: {} CNY\n总支出: {} CNY\n净额: {} CNY\n\n明细:\n{}",
+        "查询结果（{} 至 {}，排序：{}）:\n该范围共 {} 条记录，本次返回 {} 条\n区间总收入: {} CNY\n区间总支出: {} CNY\n净额: {} CNY\n\n明细:\n{}{}",
         start_date.format("%Y-%m-%d"),
         end_date.format("%Y-%m-%d"),
-        result.total,
+        sort_label,
+        total_count,
+        rows.len(),
         total_income,
         total_expense,
         total_income - total_expense,
         if lines.is_empty() { "无记录".to_string() } else { lines.join("\n") },
+        truncated_note,
     );
 
     Ok(summary)

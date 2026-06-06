@@ -8,7 +8,6 @@ import { Toaster } from '@/components/ui/toast';
 
 const LoginPage = lazy(() => import('@/pages/LoginPage'));
 const RegisterPage = lazy(() => import('@/pages/RegisterPage'));
-const DashboardPage = lazy(() => import('@/pages/DashboardPage'));
 const TransactionsPage = lazy(() => import('@/pages/TransactionsPage'));
 // const SocialGiftsPage = lazy(() => import('@/pages/SocialGiftsPage'));
 const CategoriesPage = lazy(() => import('@/pages/CategoriesPage'));
@@ -78,10 +77,10 @@ export default function App() {
               </RequireAuth>
             }
           >
-            <Route index element={<DashboardPage />} />
+            <Route index element={<StatisticsPage />} />
             <Route path="transactions" element={<TransactionsPage />} />
             <Route path="categories" element={<CategoriesPage />} />
-            <Route path="statistics" element={<StatisticsPage />} />
+            <Route path="statistics" element={<Navigate to="/" replace />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
 

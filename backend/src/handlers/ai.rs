@@ -1,9 +1,10 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::sse::Sse,
+    response::sse::{KeepAlive, Sse},
     Json,
 };
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::config::AppState;
@@ -109,7 +110,10 @@ pub async fn chat(
     let stream =
         services::ai::chat_stream(&state.pool, auth.user_id, auth.family_id, req.message).await?;
     tracing::debug!(user_id = %auth.family_id, "chat: SSE stream created");
-    Ok(Sse::new(stream))
+    // Reasoning models can think for a long time without emitting any visible
+    // content. Send a periodic keep-alive comment so reverse proxies (nginx
+    // proxy_read_timeout) don't drop the idle connection mid-thinking.
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))))
 }
 
 pub async fn chat_history(

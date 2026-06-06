@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router';
 import dayjs from 'dayjs';
 import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
@@ -8,9 +9,14 @@ import {
   Loader2,
   TrendingUp,
   TrendingDown,
-  PiggyBank,
   BarChart3,
   CalendarDays,
+  Wallet,
+  HeartPulse,
+  ArrowRight,
+  MapPin,
+  ReceiptText,
+  Plus,
 } from 'lucide-react';
 import {
   Card,
@@ -33,6 +39,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import * as statsService from '@/services/stats';
+import * as transactionsService from '@/services/transactions';
+import * as categoriesService from '@/services/categories';
 import { useDataStore } from '@/stores/dataStore';
 import type {
   MonthlyTrend,
@@ -42,14 +50,18 @@ import type {
   SubcategoryBreakdown,
   DailyTrend,
   YearlyTrend,
+  DailyHeatmap,
+  Transaction,
+  Category,
 } from '@/types';
-import { formatCurrency } from '@/utils/format';
+import { formatCurrency, formatDate } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import { TransactionListDialog } from '@/components/TransactionListDialog';
 
 
 const INCOME_COLOR = '#10B981';
 const EXPENSE_COLOR = '#EF4444';
+const BALANCE_COLOR = '#0062FF';
 
 const CATEGORY_PALETTE = [
   '#0062FF', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981',
@@ -209,9 +221,11 @@ function TypeToggle({
 /* ================================================================== */
 
 function OverviewTab() {
+  const navigate = useNavigate();
   const currentYear = dayjs().year();
   const currentMonth = dayjs().month() + 1;
   const transactionsRev = useDataStore((s) => s.transactionsRev);
+  const categoriesRev = useDataStore((s) => s.categoriesRev);
 
   const [year, setYear] = useState(currentYear);
   const [viewType, setViewType] = useState<'all' | 'expense' | 'income'>('all');
@@ -225,6 +239,38 @@ function OverviewTab() {
   const [yearlyData, setYearlyData] = useState<YearlyTrend[]>([]);
   const [yearlyLoading, setYearlyLoading] = useState(true);
   const [clickedRange, setClickedRange] = useState<{ start: string; end: string; title: string } | null>(null);
+
+  // Merged-in dashboard widgets: calendar heatmap + recent transactions
+  const [heatmapData, setHeatmapData] = useState<DailyHeatmap[]>([]);
+  const [heatmapType, setHeatmapType] = useState<'expense' | 'income'>('expense');
+  const [recentTx, setRecentTx] = useState<Transaction[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [clickedDate, setClickedDate] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    statsService
+      .dailyHeatmap({ year })
+      .then((d) => !cancelled && setHeatmapData(d))
+      .catch(() => !cancelled && setHeatmapData([]));
+    return () => { cancelled = true; };
+  }, [year, transactionsRev]);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      transactionsService.list({ per_page: 5 }),
+      categoriesService.getAll(),
+    ])
+      .then(([txData, allCats]) => {
+        if (!cancelled) {
+          setRecentTx(txData.data);
+          setCategories(allCats);
+        }
+      })
+      .catch(() => { if (!cancelled) { setRecentTx([]); setCategories([]); } });
+    return () => { cancelled = true; };
+  }, [transactionsRev, categoriesRev]);
 
   useEffect(() => {
     let cancelled = false;
@@ -272,18 +318,6 @@ function OverviewTab() {
     };
   });
 
-  const totalIncome = MONTHS.reduce((s, m) => {
-    const row = monthlyData.find((t) => t.month === m);
-    return s + (parseFloat(row?.income ?? '0') || 0);
-  }, 0);
-  const totalExpense = MONTHS.reduce((s, m) => {
-    const row = monthlyData.find((t) => t.month === m);
-    return s + (parseFloat(row?.expense ?? '0') || 0);
-  }, 0);
-  const savingsRate = totalIncome > 0
-    ? ((totalIncome - totalExpense) / totalIncome) * 100
-    : 0;
-
   const dailyChartData = useMemo(() => {
     const m = Number(selectedMonth);
     const days = daysInMonth(year, m);
@@ -306,6 +340,141 @@ function OverviewTab() {
     income: showIncome ? (parseFloat(d.income) || 0) : 0,
     expense: showExpense ? (parseFloat(d.expense) || 0) : 0,
   }));
+
+  // --- Year overview (independent of viewType) ---
+  const currentYearData = yearlyData.find((y) => y.year === year);
+  const yearIncome = parseFloat(currentYearData?.income ?? '0');
+  const yearExpense = parseFloat(currentYearData?.expense ?? '0');
+  const yearNet = yearIncome - yearExpense;
+
+  const prevYearData = yearlyData.find((y) => y.year === year - 1);
+  const prevYearExpense = parseFloat(prevYearData?.expense ?? '0');
+  const yearExpenseChange = prevYearExpense > 0
+    ? ((yearExpense - prevYearExpense) / prevYearExpense) * 100
+    : null;
+
+  const healthRate = yearIncome > 0
+    ? Math.max(0, Math.min(1, (yearIncome - yearExpense) / yearIncome))
+    : 0;
+
+  // --- Recent transactions enriched with category info ---
+  const enrichedRecentTx = useMemo(() => {
+    const catMap = new Map(categories.map((c) => [c.id, c]));
+    const subMap = new Map(
+      categories.flatMap((c) => (c.subcategories ?? []).map((s) => [s.id, s])),
+    );
+    return recentTx.map((tx) => ({
+      ...tx,
+      category: catMap.get(tx.category_id),
+      subcategory: tx.subcategory_id ? subMap.get(tx.subcategory_id) : undefined,
+    }));
+  }, [recentTx, categories]);
+
+  // --- Calendar heatmap ---
+  const heatmapChartData = useMemo(() =>
+    heatmapData.map((d) => [d.date, parseFloat(d[heatmapType]) || 0] as [string, number]),
+  [heatmapData, heatmapType]);
+
+  const heatmapMax = useMemo(() => {
+    const vals = heatmapChartData.map(([, v]) => v);
+    return vals.length > 0 ? Math.max(...vals) : 1000;
+  }, [heatmapChartData]);
+
+  const heatmapOption = useMemo((): echarts.EChartsCoreOption => {
+    const colors = heatmapType === 'expense'
+      ? ['#ebedf0', '#fecaca', '#f87171', '#dc2626', '#991b1b']
+      : ['#ebedf0', '#bbf7d0', '#4ade80', '#16a34a', '#14532d'];
+    const label = heatmapType === 'expense' ? '支出' : '收入';
+    return {
+      tooltip: {
+        formatter: (params: any) => {
+          const val = params.value?.[1] ?? 0;
+          return `${params.value?.[0]}<br/>${label}: ${formatCurrency(val, 'CNY')}`;
+        },
+      },
+      visualMap: {
+        min: 0,
+        max: heatmapMax || 1000,
+        type: 'continuous',
+        orient: 'horizontal',
+        left: 'center',
+        top: 0,
+        textStyle: { fontSize: 11 },
+        inRange: { color: colors },
+      },
+      calendar: {
+        top: 60,
+        left: 30,
+        right: 30,
+        cellSize: ['auto', 13],
+        range: String(year),
+        itemStyle: { borderWidth: 0.5 },
+        yearLabel: { show: false },
+        dayLabel: { fontSize: 10, nameMap: 'ZH' },
+        monthLabel: { fontSize: 11, nameMap: 'ZH' },
+      },
+      series: {
+        type: 'heatmap',
+        coordinateSystem: 'calendar',
+        data: heatmapChartData,
+      },
+    };
+  }, [heatmapChartData, heatmapMax, heatmapType, year]);
+
+  const gaugeOption = useMemo((): echarts.EChartsCoreOption => ({
+    series: [{
+      type: 'gauge',
+      startAngle: 180,
+      endAngle: 0,
+      center: ['50%', '75%'],
+      radius: '90%',
+      min: 0,
+      max: 1,
+      splitNumber: 8,
+      axisLine: {
+        lineStyle: {
+          width: 6,
+          color: [
+            [0.25, '#FF6E76'],
+            [0.5, '#FDDD60'],
+            [0.75, '#58D9F9'],
+            [1, '#7CFFB2'],
+          ],
+        },
+      },
+      pointer: {
+        icon: 'path://M12.8,0.7l12,40.1H0.7L12.8,0.7z',
+        length: '12%',
+        width: 20,
+        offsetCenter: [0, '-60%'],
+        itemStyle: { color: 'auto' },
+      },
+      axisTick: { length: 12, lineStyle: { color: 'auto', width: 2 } },
+      splitLine: { length: 20, lineStyle: { color: 'auto', width: 5 } },
+      axisLabel: {
+        color: '#464646',
+        fontSize: 14,
+        distance: -40,
+        rotate: 'tangential',
+        formatter: (value: number) => {
+          if (value === 0.875) return '优秀';
+          if (value === 0.625) return '良好';
+          if (value === 0.375) return '一般';
+          if (value === 0.125) return '较差';
+          return '';
+        },
+      },
+      title: { offsetCenter: [0, '-10%'], fontSize: 14 },
+      detail: {
+        fontSize: 24,
+        offsetCenter: [0, '-35%'],
+        valueAnimation: true,
+        formatter: (value: number) => Math.round(value * 100) + '%',
+        color: 'inherit',
+      },
+      data: [{ value: healthRate, name: '储蓄率' }],
+    }],
+  }), [healthRate]);
 
   const monthlyBarOption = useMemo((): echarts.EChartsCoreOption => {
     const series: any[] = [];
@@ -352,6 +521,9 @@ function OverviewTab() {
         formatter: tooltipFormatter,
       },
       toolbox: {
+        right: 8,
+        top: 4,
+        itemGap: 10,
         feature: {
           dataView: { show: true, readOnly: false },
           magicType: { show: true, type: ['line', 'bar'] },
@@ -360,7 +532,7 @@ function OverviewTab() {
         },
       },
       legend: { data: legendData, bottom: 0, textStyle: { fontSize: 12 } },
-      grid: { left: 60, right: 60, top: 40, bottom: 36 },
+      grid: { left: 60, right: 60, top: 56, bottom: 36 },
       xAxis: {
         type: 'category',
         data: MONTHS.map((m) => `${m}月`),
@@ -515,6 +687,76 @@ function OverviewTab() {
         <TypeToggle value={viewType} onChange={setViewType} />
       </div>
 
+      {/* Year Overview Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex items-center gap-2.5 mb-2">
+              <div className="p-2 bg-income/10 rounded-lg">
+                <TrendingUp className="size-4 text-income" />
+              </div>
+              <span className="text-xs text-muted-foreground">年度收入</span>
+            </div>
+            <p className="text-2xl font-bold text-income tracking-tight tabular-nums">
+              {formatCurrency(yearIncome, 'CNY')}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex items-center gap-2.5 mb-2">
+              <div className="p-2 bg-expense/10 rounded-lg">
+                <TrendingDown className="size-4 text-expense" />
+              </div>
+              <span className="text-xs text-muted-foreground">年度支出</span>
+            </div>
+            <p className="text-2xl font-bold text-expense tracking-tight tabular-nums">
+              {formatCurrency(yearExpense, 'CNY')}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex items-center gap-2.5 mb-2">
+              <div className="p-2 bg-primary/10 rounded-lg">
+                <Wallet className="size-4 text-primary" />
+              </div>
+              <span className="text-xs text-muted-foreground">年度结余</span>
+            </div>
+            <p className={cn(
+              'text-2xl font-bold tracking-tight tabular-nums',
+              yearNet >= 0 ? 'text-primary' : 'text-expense',
+            )}>
+              {yearNet >= 0 ? '+' : ''}{formatCurrency(yearNet, 'CNY')}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex items-center gap-2.5 mb-2">
+              <div className="p-2 bg-primary/10 rounded-lg">
+                <BarChart3 className="size-4 text-primary" />
+              </div>
+              <span className="text-xs text-muted-foreground">年度同比</span>
+            </div>
+            {yearExpenseChange !== null ? (
+              <p className={cn(
+                'text-2xl font-bold tracking-tight tabular-nums',
+                yearExpenseChange <= 0 ? 'text-income' : 'text-expense',
+              )}>
+                {yearExpenseChange > 0 ? '↑' : '↓'}{Math.abs(yearExpenseChange).toFixed(1)}%
+              </p>
+            ) : (
+              <p className="text-lg text-muted-foreground">&mdash;</p>
+            )}
+            <p className="text-[10px] text-muted-foreground mt-0.5">支出同比上年</p>
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Monthly Trend */}
       <div className="flex flex-col gap-4">
         <h2 className="text-base font-semibold flex items-center gap-2">
@@ -537,53 +779,70 @@ function OverviewTab() {
                 />
               </CardContent>
             </Card>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <Card>
-                <CardContent className="p-5">
-                  <div className="flex items-center gap-3 mb-2">
-                    <div className="p-2 bg-income/10 rounded-lg">
-                      <TrendingUp className="size-4 text-income" />
-                    </div>
-                    <span className="text-sm text-muted-foreground">年度总收入</span>
-                  </div>
-                  <p className="text-2xl font-bold text-income tabular-nums">
-                    {formatCurrency(totalIncome, 'CNY')}
-                  </p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="p-5">
-                  <div className="flex items-center gap-3 mb-2">
-                    <div className="p-2 bg-expense/10 rounded-lg">
-                      <TrendingDown className="size-4 text-expense" />
-                    </div>
-                    <span className="text-sm text-muted-foreground">年度总支出</span>
-                  </div>
-                  <p className="text-2xl font-bold text-expense tabular-nums">
-                    {formatCurrency(totalExpense, 'CNY')}
-                  </p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="p-5">
-                  <div className="flex items-center gap-3 mb-2">
-                    <div className="p-2 bg-primary/10 rounded-lg">
-                      <PiggyBank className="size-4 text-primary" />
-                    </div>
-                    <span className="text-sm text-muted-foreground">储蓄率</span>
-                  </div>
-                  <p className={cn(
-                    'text-2xl font-bold tabular-nums',
-                    savingsRate >= 0 ? 'text-primary' : 'text-expense',
-                  )}>
-                    {savingsRate.toFixed(1)}%
-                  </p>
-                </CardContent>
-              </Card>
-            </div>
           </>
         )}
+      </div>
+
+      {/* Calendar Heatmap */}
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold flex items-center gap-2">
+            <CalendarDays className="size-4 text-primary" />
+            年度{heatmapType === 'expense' ? '支出' : '收入'}热力图
+          </h2>
+          <div className="inline-flex rounded-lg border p-0.5 text-xs">
+            <button
+              className={cn(
+                'px-2.5 py-1 rounded-md transition-colors',
+                heatmapType === 'expense' ? 'bg-expense text-white' : 'text-muted-foreground hover:text-foreground',
+              )}
+              onClick={() => setHeatmapType('expense')}
+            >
+              支出
+            </button>
+            <button
+              className={cn(
+                'px-2.5 py-1 rounded-md transition-colors',
+                heatmapType === 'income' ? 'bg-income text-white' : 'text-muted-foreground hover:text-foreground',
+              )}
+              onClick={() => setHeatmapType('income')}
+            >
+              收入
+            </button>
+          </div>
+        </div>
+        <Card>
+          <CardContent className="pt-6">
+            {heatmapChartData.length === 0 ? (
+              <EmptyState message="该年度暂无数据" />
+            ) : (
+              <ReactECharts
+                option={heatmapOption}
+                style={{ height: 200 }}
+                notMerge
+                onEvents={{
+                  click: (params: any) => {
+                    const date = params.value?.[0];
+                    if (date) setClickedDate(date);
+                  },
+                }}
+              />
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Financial Health Gauge */}
+      <div className="flex flex-col gap-4">
+        <h2 className="text-base font-semibold flex items-center gap-2">
+          <HeartPulse className="size-4 text-primary" />
+          财务健康度
+        </h2>
+        <Card>
+          <CardContent className="pt-6">
+            <ReactECharts option={gaugeOption} style={{ height: 220 }} notMerge />
+          </CardContent>
+        </Card>
       </div>
 
       {/* Daily Trend */}
@@ -677,6 +936,82 @@ function OverviewTab() {
         )}
       </div>
 
+      {/* Recent Transactions */}
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold flex items-center gap-2">
+            <ReceiptText className="size-4 text-primary" />
+            最近交易
+          </h2>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => navigate('/transactions')}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            查看全部
+            <ArrowRight className="size-4 ml-1" />
+          </Button>
+        </div>
+        <Card>
+          <CardContent className="pt-6">
+            {enrichedRecentTx.length === 0 ? (
+              <div className="flex flex-col items-center py-12 text-muted-foreground">
+                <ReceiptText className="size-10 mb-2 opacity-40" />
+                <p className="text-sm">暂无交易记录</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() => navigate('/transactions?add=true')}
+                >
+                  <Plus className="size-4" />
+                  添加第一笔
+                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-0.5">
+                {enrichedRecentTx.map((tx) => (
+                  <div
+                    key={tx.id}
+                    className="flex items-center gap-3 py-2.5 px-2 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
+                    onClick={() => navigate('/transactions')}
+                  >
+                    <span className="text-lg size-8 flex items-center justify-center rounded-lg bg-muted/60 shrink-0">
+                      {tx.category?.icon ?? '📝'}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">
+                        {tx.category?.name ?? '未分类'}
+                        {tx.subcategory && (
+                          <span className="text-muted-foreground font-normal"> / {tx.subcategory.name}</span>
+                        )}
+                      </p>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
+                        <span>{formatDate(tx.date)}</span>
+                        {tx.location && (
+                          <span className="inline-flex items-center gap-0.5">
+                            <MapPin className="size-3" />
+                            {tx.location}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <span className={cn(
+                      'text-sm font-semibold tabular-nums whitespace-nowrap',
+                      tx.type === 'income' ? 'text-income' : 'text-expense',
+                    )}>
+                      {tx.type === 'income' ? '+' : '-'}
+                      {formatCurrency(tx.amount, tx.currency)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
       {clickedRange && (
         <TransactionListDialog
           open={!!clickedRange}
@@ -684,6 +1019,16 @@ function OverviewTab() {
           title={clickedRange.title}
           startDate={clickedRange.start}
           endDate={clickedRange.end}
+        />
+      )}
+
+      {clickedDate && (
+        <TransactionListDialog
+          open={!!clickedDate}
+          onOpenChange={(open) => { if (!open) setClickedDate(null); }}
+          title={`${dayjs(clickedDate).format('M月D日')} 交易记录`}
+          startDate={clickedDate}
+          endDate={clickedDate}
         />
       )}
     </div>
@@ -1225,6 +1570,9 @@ function SocialGiftsTab() {
         formatter: tooltipFormatter,
       },
       toolbox: {
+        right: 8,
+        top: 4,
+        itemGap: 10,
         feature: {
           dataView: { show: true, readOnly: false },
           magicType: { show: true, type: ['line', 'bar'] },
@@ -1233,7 +1581,7 @@ function SocialGiftsTab() {
         },
       },
       legend: { data: legendData, bottom: 0, textStyle: { fontSize: 12 } },
-      grid: { left: 60, right: 60, top: 40, bottom: 36 },
+      grid: { left: 60, right: 60, top: 56, bottom: 36 },
       xAxis: {
         type: 'category',
         data: chartData.map((d) => d.name),

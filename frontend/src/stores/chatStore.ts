@@ -1,7 +1,11 @@
 import { create } from 'zustand';
 
 import type { ChatMessage } from '@/types';
-import { chat as streamChat, getChatHistory } from '@/services/ai';
+import {
+  chat as streamChat,
+  clearChatHistory,
+  getChatHistory,
+} from '@/services/ai';
 import { useDataStore } from '@/stores/dataStore';
 
 export interface ChatMessageUI extends ChatMessage {
@@ -15,7 +19,7 @@ interface ChatState {
   historyLoaded: boolean;
 
   setOpen: (open: boolean) => void;
-  clearMessages: () => void;
+  clearMessages: () => Promise<void>;
   loadHistory: () => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
 }
@@ -28,7 +32,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setOpen: (isOpen) => set({ isOpen }),
 
-  clearMessages: () => set({ messages: [], historyLoaded: false }),
+  clearMessages: async () => {
+    // Clear UI immediately so the user gets instant feedback. historyLoaded
+    // stays true to prevent loadHistory() from re-fetching stale messages.
+    set({ messages: [], historyLoaded: true, isLoading: false });
+    try {
+      // Also wipe the server-side chat history, otherwise the next message
+      // would still send the old conversation as context to the model.
+      await clearChatHistory();
+    } catch {
+      /* clearing server history failed; UI is already cleared */
+    }
+  },
 
   loadHistory: async () => {
     if (get().historyLoaded) return;

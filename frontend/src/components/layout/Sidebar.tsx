@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { NavLink, useLocation } from 'react-router';
 import {
-  Home,
   Receipt,
   FolderOpen,
   BarChart3,
@@ -53,10 +52,9 @@ import type { LlmConfig, Member } from '@/types';
 import { useToast } from '@/hooks/useToast';
 
 const navItems = [
-  { to: '/', label: '首页', icon: Home },
+  { to: '/', label: '统计分析', icon: BarChart3 },
   { to: '/transactions', label: '交易记录', icon: Receipt },
   { to: '/categories', label: '分类管理', icon: FolderOpen },
-  { to: '/statistics', label: '统计分析', icon: BarChart3 },
   { to: '/settings', label: '设置', icon: Settings },
 ];
 

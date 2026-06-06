@@ -13,7 +13,6 @@ import {
 } from '@/components/ui/select';
 import { Sidebar } from './Sidebar';
 import { ChatSidebar } from '@/components/chat/ChatSidebar';
-import { QuickChatInput } from '@/components/chat/QuickChatInput';
 import { useChatStore } from '@/stores/chatStore';
 import { useAuthStore } from '@/stores/authStore';
 import { useDataStore } from '@/stores/dataStore';
@@ -50,7 +49,13 @@ export function AppLayout() {
     <div className="flex h-screen overflow-hidden">
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div
+        className={cn(
+          'flex flex-1 flex-col overflow-hidden',
+          'transition-[margin] duration-300 ease-in-out',
+          chatOpen && 'md:mr-[400px]',
+        )}
+      >
         <header className="flex h-14 shrink-0 items-center justify-between border-b bg-background px-4 lg:px-6">
           <div className="flex items-center gap-3">
             <Button
@@ -102,7 +107,6 @@ export function AppLayout() {
       </div>
 
       <ChatSidebar />
-      <QuickChatInput />
     </div>
   );
 }

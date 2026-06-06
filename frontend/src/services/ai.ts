@@ -25,6 +25,10 @@ export async function getChatHistory(): Promise<ChatMessage[]> {
   return data;
 }
 
+export async function clearChatHistory(): Promise<void> {
+  await api.delete('/ai/chat/history');
+}
+
 function resolveChatRequestUrl(): string {
   const base = import.meta.env.VITE_API_URL ?? '/api';
   const suffix = '/ai/chat';
@@ -88,6 +92,84 @@ export async function chat(
   const decoder = new TextDecoder();
   let carry = '';
   let currentEvent = 'message';
+  // Accumulates the `data:` lines of the current SSE event. Per the SSE spec,
+  // a single event may span multiple data lines that must be re-joined with
+  // '\n' — this is exactly how newlines inside a streamed token arrive.
+  let dataLines: string[] = [];
+
+  const dispatchEvent = () => {
+    const evt = currentEvent;
+    const lines = dataLines;
+    currentEvent = 'message';
+    dataLines = [];
+
+    if (lines.length === 0) return;
+    const payload = lines.join('\n');
+    if (payload === '[DONE]') return;
+
+    if (evt === 'error') {
+      onError?.(new Error(payload));
+      return;
+    }
+
+    if (evt === 'tool_result') {
+      try {
+        onToolResult?.(JSON.parse(payload));
+      } catch { /* ignore parse errors */ }
+      return;
+    }
+
+    let chunk = '';
+    if (payload.startsWith('{') || payload.startsWith('[')) {
+      try {
+        const obj = JSON.parse(payload) as {
+          content?: string;
+          delta?: string;
+          text?: string;
+          choices?: { delta?: { content?: string } }[];
+        };
+        chunk =
+          obj.delta ??
+          obj.content ??
+          obj.text ??
+          obj.choices?.[0]?.delta?.content ??
+          '';
+      } catch {
+        chunk = payload;
+      }
+    } else {
+      chunk = payload;
+    }
+    if (chunk) onDelta?.(chunk);
+  };
+
+  const handleLine = (raw: string) => {
+    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+
+    // Blank line terminates the current event.
+    if (line === '') {
+      dispatchEvent();
+      return;
+    }
+    // Comment / keep-alive heartbeat.
+    if (line.startsWith(':')) return;
+
+    if (line.startsWith('event:')) {
+      let name = line.slice(6);
+      if (name.startsWith(' ')) name = name.slice(1);
+      currentEvent = name;
+      return;
+    }
+
+    if (line.startsWith('data:')) {
+      let value = line.slice(5);
+      // SSE: strip exactly one leading space, never trim the content itself.
+      if (value.startsWith(' ')) value = value.slice(1);
+      dataLines.push(value);
+      return;
+    }
+    // Other fields (id:, retry:) are ignored.
+  };
 
   try {
     while (true) {
@@ -97,61 +179,12 @@ export async function chat(
       const parts = carry.split('\n');
       carry = parts.pop() ?? '';
       for (const raw of parts) {
-        const line = raw.replace(/\r$/, '').trim();
-
-        if (line.startsWith('event:')) {
-          currentEvent = line.slice(6).trim();
-          continue;
-        }
-
-        if (!line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (!payload || payload === '[DONE]') {
-          currentEvent = 'message';
-          continue;
-        }
-
-        if (currentEvent === 'tool_result') {
-          try {
-            const data = JSON.parse(payload);
-            onToolResult?.(data);
-          } catch { /* ignore parse errors */ }
-          currentEvent = 'message';
-          continue;
-        }
-
-        let chunk = '';
-        if (payload.startsWith('{') || payload.startsWith('[')) {
-          try {
-            const obj = JSON.parse(payload) as {
-              content?: string;
-              delta?: string;
-              text?: string;
-              choices?: { delta?: { content?: string } }[];
-            };
-            chunk =
-              obj.delta ??
-              obj.content ??
-              obj.text ??
-              obj.choices?.[0]?.delta?.content ??
-              '';
-          } catch {
-            chunk = payload;
-          }
-        } else {
-          chunk = payload;
-        }
-        if (chunk) onDelta?.(chunk);
-        currentEvent = 'message';
+        handleLine(raw);
       }
     }
-    if (carry.trim()) {
-      const line = carry.replace(/\r$/, '').trim();
-      if (line.startsWith('data:')) {
-        const payload = line.slice(5).trim();
-        if (payload && payload !== '[DONE]') onDelta?.(payload);
-      }
-    }
+    // Flush any trailing partial line + the final un-terminated event.
+    if (carry) handleLine(carry);
+    dispatchEvent();
   } catch (e) {
     if (e instanceof Error && e.name === 'AbortError') {
       return;
