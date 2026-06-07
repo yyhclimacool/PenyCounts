@@ -38,7 +38,14 @@ docker compose down              # Stop all services
 
 ### Database
 
-PostgreSQL 15. Migrations run automatically on backend startup via `sqlx::migrate!()`. Add new migrations as `backend/migrations/NNN_description.sql`.
+PostgreSQL 15. Migrations run automatically on backend startup via `sqlx::migrate!()`, which **embeds migration files at compile time** — adding/editing a migration requires rebuilding the backend image (`docker compose up -d --build backend`), not just a restart.
+
+Migrations are consolidated into two files (the project assumes full redeployment / DB wipe rather than incremental migration history):
+
+- `001_initial_schema.sql` — all tables, indexes, constraints (multi-family schema with `family_id` scoping, circular FK between users/families resolved via `ALTER TABLE`).
+- `002_seed_default_categories.sql` — all default categories + subcategories (icons inlined).
+
+Add new migrations as `backend/migrations/NNN_description.sql`. Editing the consolidated files requires wiping the DB (`docker compose down -v`) before redeploy, since changing already-applied migration files breaks the `_sqlx_migrations` checksum.
 
 Access DB in Docker: `docker exec penycounts-postgres-1 psql -U penycounts -d penycounts`
 
@@ -66,6 +73,8 @@ Reasoning model support: the streaming loop detects `reasoning_content` (DeepSee
 
 **SSE + compression caveat:** `CompressionLayer` buffers responses, which breaks SSE streaming. The router splits into two sub-routers: `api_routes` (with compression) and `sse_routes` (`/api/ai/chat`, no compression), merged into the parent router.
 
+**AI chat client details:** Assistant messages render Markdown via `react-markdown` + `remark-gfm`. The frontend SSE parser (`services/ai.ts`) buffers multi-line `data:` segments and rejoins them with `\n` so Markdown (lists, code blocks) renders correctly during live streaming, not just after refresh. Clearing the chat (`clearMessages`) also calls `clearChatHistory()` (`DELETE /api/ai/chat/history`) to reset the backend conversation context, not just the local UI. The agent loop de-duplicates repeated identical tool calls to prevent infinite tool-use loops.
+
 ## Key Conventions
 
 - UI components follow shadcn/ui patterns (Radix UI primitives + CVA for variants) in `frontend/src/components/ui/`
@@ -76,10 +85,11 @@ Reasoning model support: the streaming loop detects `reasoning_content` (DeepSee
 - Database amounts use `NUMERIC(15,2)`, serialized as strings in JSON via `serde(with-str)`
 - System-default categories have `user_id IS NULL`; family-created categories have `family_id` set
 - All protected API endpoints require `Authorization: Bearer <JWT>` header
-- Pagination pattern: query params `page` + `per_page`, response wraps in `PaginatedResponse { data, total, page, per_page }`
+- Pagination pattern: query params `page` + `per_page`, response wraps in `PaginatedResponse { data, total, page, per_page }`. Backend clamps `per_page` to a max of 100 (`services/transaction.rs`). The transactions page exposes a user-selectable page size (20/50/100) plus first/prev/next/last navigation controls.
 - Members table has `UNIQUE (family_id, name)` constraint — member names are unique per family
-- CSV import uses `classify_transaction()` to map free-form category strings from external data to the app's two-level category system
-- **Cross-component data invalidation:** `dataStore.ts` uses a Zustand revision-counter pattern (`transactionsRev`, `categoriesRev`, `membersRev`, `familiesRev`). Components subscribe to the relevant `*Rev` counter in their `useEffect` deps; mutating components call `invalidate*()` after writes. The AI chat store calls `invalidateTransactions()` on successful tool results.
+- **Clearing all transactions also deletes that family's members** — `clear_all_transactions()` deletes `transactions` and `members` atomically within a DB transaction.
+- **CSV round-trip:** Export columns are `备注,日期,分类,金额,收支,流水,月份,人员,地点,子分类` (two-level category, no parent-record column). Import is **header-based** (maps columns by name, tolerant of column order / older formats). It prioritizes matching the explicit `分类`/`子分类` values to existing categories, falling back to `classify_transaction()` keyword classification only when no explicit match exists. `classify_transaction()` ordering matters: more-specific categories (e.g. `通讯网络`) must come before broader ones (e.g. `数码电子`) to avoid keyword misclassification.
+- **Cross-component data invalidation:** `dataStore.ts` uses a Zustand revision-counter pattern (`transactionsRev`, `categoriesRev`, `membersRev`, `familiesRev`, `socialGiftsRev`). Components subscribe to the relevant `*Rev` counter in their `useEffect` deps; mutating components call `invalidate*()` after writes. The AI chat store calls `invalidateTransactions()` / `invalidateMembers()` / `invalidateSocialGifts()` on successful tool results so the whole UI updates in real time.
 
 ## Adding a New Feature
 

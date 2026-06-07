@@ -9,6 +9,8 @@ import {
   ReceiptText,
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   ChevronDown,
   ChevronUp,
   X,
@@ -49,7 +51,7 @@ import { cn } from '@/utils/cn';
 import { useToast } from '@/hooks/useToast';
 import { DatePicker } from '@/components/ui/date-picker';
 
-const PER_PAGE = 20;
+const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
 interface FormState {
   type: 'income' | 'expense';
@@ -82,6 +84,7 @@ export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(20);
   const [loading, setLoading] = useState(true);
 
   const [filterType, setFilterType] = useState<string>('all');
@@ -121,7 +124,7 @@ export default function TransactionsPage() {
     try {
       const filters: Record<string, unknown> = {
         page,
-        per_page: PER_PAGE,
+        per_page: perPage,
       };
       if (filterType !== 'all') filters.type = filterType;
       if (filterCategoryId !== 'all') filters.category_id = filterCategoryId;
@@ -140,7 +143,7 @@ export default function TransactionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterType, filterCategoryId, filterSubcategoryId, filterMember, dateFrom, dateTo, minAmount, maxAmount, searchText, addToast, transactionsRev]);
+  }, [page, perPage, filterType, filterCategoryId, filterSubcategoryId, filterMember, dateFrom, dateTo, minAmount, maxAmount, searchText, addToast, transactionsRev]);
 
   useEffect(() => {
     fetchTransactions();
@@ -187,7 +190,7 @@ export default function TransactionsPage() {
     return Array.from(map.entries()).sort(([a], [b]) => b.localeCompare(a));
   }, [enrichedTransactions]);
 
-  const totalPages = Math.ceil(total / PER_PAGE);
+  const totalPages = Math.ceil(total / perPage);
 
   const filteredCategories = useMemo(
     () => categories.filter((c) => c.type === form.type),
@@ -720,27 +723,66 @@ export default function TransactionsPage() {
       )}
 
       {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2 pt-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => p - 1)}
-          >
-            <ChevronLeft className="size-4" />
-          </Button>
-          <span className="text-sm text-muted-foreground px-3 tabular-nums">
-            {page} / {totalPages}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            <ChevronRight className="size-4" />
-          </Button>
+      {total > 0 && (
+        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 pt-2">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span>每页</span>
+            <Select
+              value={String(perPage)}
+              onValueChange={(v) => { setPerPage(Number(v)); setPage(1); }}
+            >
+              <SelectTrigger className="h-8 w-[80px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PAGE_SIZE_OPTIONS.map((n) => (
+                  <SelectItem key={n} value={String(n)}>
+                    {n} 条
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="tabular-nums">共 {total} 条</span>
+          </div>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page <= 1}
+                onClick={() => setPage(1)}
+              >
+                <ChevronsLeft className="size-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => p - 1)}
+              >
+                <ChevronLeft className="size-4" />
+              </Button>
+              <span className="text-sm text-muted-foreground px-3 tabular-nums">
+                {page} / {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                <ChevronRight className="size-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page >= totalPages}
+                onClick={() => setPage(totalPages)}
+              >
+                <ChevronsRight className="size-4" />
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
