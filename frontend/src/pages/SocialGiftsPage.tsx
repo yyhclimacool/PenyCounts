@@ -47,6 +47,7 @@ import { formatCurrency, formatDate } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import { useToast } from '@/hooks/useToast';
 import { DatePicker } from '@/components/ui/date-picker';
+import { useDataStore } from '@/stores/dataStore';
 
 const PER_PAGE = 20;
 
@@ -106,6 +107,8 @@ export default function SocialGiftsPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  const socialGiftsRev = useDataStore((s) => s.socialGiftsRev);
+
   const fetchGifts = useCallback(async () => {
     setLoading(true);
     try {
@@ -122,7 +125,7 @@ export default function SocialGiftsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterType, addToast]);
+  }, [page, filterType, addToast, socialGiftsRev]);
 
   useEffect(() => {
     fetchGifts();
@@ -134,7 +137,7 @@ export default function SocialGiftsPage() {
       .socialSummary({ year })
       .then(setSummaryData)
       .catch(() => {});
-  }, []);
+  }, [socialGiftsRev]);
 
   const { totalGiven, totalReceived, netBalance } = useMemo(() => {
     let given = 0;
@@ -218,6 +221,7 @@ export default function SocialGiftsPage() {
       fetchGifts();
       const year = dayjs().year();
       statsService.socialSummary({ year }).then(setSummaryData);
+      useDataStore.getState().invalidateSocialGifts();
     } catch {
       addToast({ title: '操作失败', variant: 'destructive' });
     } finally {
@@ -235,6 +239,7 @@ export default function SocialGiftsPage() {
       fetchGifts();
       const year = dayjs().year();
       statsService.socialSummary({ year }).then(setSummaryData);
+      useDataStore.getState().invalidateSocialGifts();
     } catch {
       addToast({ title: '删除失败', variant: 'destructive' });
     }

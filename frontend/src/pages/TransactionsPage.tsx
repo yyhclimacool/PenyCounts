@@ -268,7 +268,7 @@ export default function TransactionsPage() {
       fetchTransactions();
       useDataStore.getState().invalidateTransactions();
       if (memberTags.length > 0) {
-        membersService.list().then(setAllMembers).catch(() => {});
+        useDataStore.getState().invalidateMembers();
       }
     } catch {
       addToast({ title: '操作失败', variant: 'destructive' });
@@ -305,9 +305,8 @@ export default function TransactionsPage() {
       if (result.imported > 0) {
         fetchTransactions();
         useDataStore.getState().invalidateTransactions();
-        Promise.all([categoriesService.getAll(), membersService.list()]).then(
-          ([cats, mems]) => { setCategories(cats); setAllMembers(mems); },
-        );
+        useDataStore.getState().invalidateMembers();
+        useDataStore.getState().invalidateCategories();
       }
     } catch {
       addToast({ title: '导入失败', variant: 'destructive' });

@@ -329,6 +329,7 @@ pub async fn chat_stream(
          6. **人情往来**: 用户记录红包、礼金等，调用 create_social_gift\n\
          7. **查询人情**: 用户查询人情来往记录，调用 query_social_gifts\n\n\
          ## 记账规则:\n\
+         - **批量记账**: 用户一次描述多笔时（如「打车20，买菜50，工资到账8000」），把每一笔拆开，为每一笔分别调用一次 create_transaction（可在同一轮发起多个调用），全部记完后用列表汇总确认\n\
          - **type**: income 或 expense，根据语义判断\n\
          - **category_name**: 从可用分类中选择最匹配的\n\
          - **date**: 格式 YYYY-MM-DD。「今天」= {today}，「昨天」= 前一天\n\
@@ -381,7 +382,7 @@ pub async fn chat_stream(
             "type": "function",
             "function": {
                 "name": "create_transaction",
-                "description": "创建一条新的收支记录。当用户描述了一笔明确的收入或支出时调用此工具。",
+                "description": "创建一条新的收支记录。当用户描述了一笔明确的收入或支出时调用此工具。如果用户一次性描述了多笔（如「打车20，午饭35，买菜50」），请为每一笔分别调用一次本工具（可在同一轮一次性发起多个调用）。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -822,11 +823,18 @@ pub async fn chat_stream(
 
             // Execute each tool call and append results
             for (tc_id, tc_name, tc_args) in &tool_calls {
-                let signature = format!("{}|{}", tc_name, tc_args);
+                // Only de-duplicate *read-only* tools. Write operations
+                // (create/update/delete/social_gift) must always run — a user
+                // may legitimately batch two identical entries, and dedup would
+                // silently drop the second one.
+                let is_read_only = matches!(
+                    tc_name.as_str(),
+                    "query_transactions" | "get_statistics" | "query_social_gifts"
+                );
 
-                // Duplicate call: don't re-query the DB, just nudge the model to
+                // Duplicate query: don't re-query the DB, just nudge the model to
                 // answer from what it already has. Forces convergence next turn.
-                if !executed_signatures.insert(signature) {
+                if is_read_only && !executed_signatures.insert(format!("{}|{}", tc_name, tc_args)) {
                     tracing::warn!(tool = %tc_name, args = %tc_args, "agent loop: duplicate tool call, skipping execution");
                     force_final = true;
                     messages.push(serde_json::json!({

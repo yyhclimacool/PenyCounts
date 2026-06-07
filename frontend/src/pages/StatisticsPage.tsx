@@ -1496,6 +1496,7 @@ function SocialGiftsTab() {
   const [data, setData] = useState<SocialSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const transactionsRev = useDataStore((s) => s.transactionsRev);
+  const socialGiftsRev = useDataStore((s) => s.socialGiftsRev);
 
   useEffect(() => {
     let cancelled = false;
@@ -1506,7 +1507,7 @@ function SocialGiftsTab() {
       .catch(() => !cancelled && setData([]))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, [year, transactionsRev]);
+  }, [year, transactionsRev, socialGiftsRev]);
 
   const showGiven = viewType === 'all' || viewType === 'expense';
   const showReceived = viewType === 'all' || viewType === 'income';

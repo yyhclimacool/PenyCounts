@@ -127,13 +127,16 @@ export default function SettingsPage() {
   const [inviteCodeInput, setInviteCodeInput] = useState('');
   const [familySubmitting, setFamilySubmitting] = useState(false);
 
+  const familiesRev = useDataStore((s) => s.familiesRev);
+  const membersRev = useDataStore((s) => s.membersRev);
+
   useEffect(() => {
     familyService
       .listFamilies()
       .then(setFamilies)
       .catch(() => {})
       .finally(() => setLoadingFamilies(false));
-  }, []);
+  }, [familiesRev]);
 
   async function handleCreateFamily() {
     if (!newFamilyName.trim()) {
@@ -257,13 +260,15 @@ export default function SettingsPage() {
       })
       .catch(() => {})
       .finally(() => setLoadingConfig(false));
+  }, []);
 
+  useEffect(() => {
     membersService
       .list()
       .then(setMembers)
       .catch(() => {})
       .finally(() => setLoadingMembers(false));
-  }, []);
+  }, [membersRev]);
 
   async function handleSaveLlmConfig() {
     if (!llmForm.api_url.trim()) {
@@ -397,10 +402,11 @@ export default function SettingsPage() {
     setClearingTxns(true);
     try {
       const { deleted } = await clearAllTransactions();
-      addToast({ title: `已清除 ${deleted} 条记账记录` });
+      addToast({ title: `已清除 ${deleted} 条记账记录及相关家庭成员` });
       setClearTxnDialogOpen(false);
       setClearTxnConfirmText('');
       useDataStore.getState().invalidateTransactions();
+      useDataStore.getState().invalidateMembers();
     } catch {
       addToast({ title: '清除失败', variant: 'destructive' });
     } finally {
@@ -1287,7 +1293,7 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium">清除所有记账记录</p>
-              <p className="text-xs text-muted-foreground">删除当前家庭的全部交易数据</p>
+              <p className="text-xs text-muted-foreground">删除当前家庭的全部交易数据及相关家庭成员</p>
             </div>
             <Button
               variant="destructive"
@@ -1310,7 +1316,7 @@ export default function SettingsPage() {
               确认清除所有记账记录
             </DialogTitle>
             <DialogDescription>
-              此操作将永久删除当前家庭的所有交易记录，且无法恢复。请输入"删除所有记录"以确认。
+              此操作将永久删除当前家庭的所有交易记录及相关家庭成员，且无法恢复。请输入"删除所有记录"以确认。
             </DialogDescription>
           </DialogHeader>
           <div className="py-3">

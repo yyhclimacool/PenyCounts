@@ -101,7 +101,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         },
         onToolResult: (data) => {
           if (data.summary) {
+            // AI tools可创建/修改交易、成员、社交礼金，统一失效相关数据
             useDataStore.getState().invalidateTransactions();
+            useDataStore.getState().invalidateMembers();
+            useDataStore.getState().invalidateSocialGifts();
             full += data.summary;
             const content = full;
             set((s) => {

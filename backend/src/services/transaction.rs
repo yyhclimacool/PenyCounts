@@ -370,10 +370,23 @@ pub async fn clear_all_transactions(
     pool: &PgPool,
     family_id: Uuid,
 ) -> Result<u64, AppError> {
+    // Clear transactions and the family's members atomically. transaction_members
+    // rows cascade-delete with their transactions; members has no FK from them,
+    // so it can be cleared independently.
+    let mut tx = pool.begin().await?;
+
     let result = sqlx::query("DELETE FROM transactions WHERE family_id = $1")
         .bind(family_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+
+    sqlx::query("DELETE FROM members WHERE family_id = $1")
+        .bind(family_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
     Ok(result.rows_affected())
 }
 
@@ -584,6 +597,13 @@ fn classify_transaction(csv_cat: &str, note: &str, txn_type: &str) -> (&'static 
             "外卖"
         } else if has_keyword(&text, &["吃饭", "涮肉", "烤肉", "火锅", "面馆", "老乡鸡", "聚餐"]) {
             "聚餐"
+        } else if csv_cat == "日常买菜零食"
+            || has_keyword(&text, &[
+                "买菜", "菜场", "菜市场", "生鲜", "蔬菜", "盒马", "叮咚",
+                "超市", "百果园", "水果", "草莓", "鸡蛋", "海鲜", "火腿",
+            ])
+        {
+            "日常买菜"
         } else {
             "零食饮料"
         };

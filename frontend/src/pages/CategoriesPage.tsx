@@ -90,9 +90,11 @@ export default function CategoriesPage() {
     }
   };
 
+  const categoriesRev = useDataStore((s) => s.categoriesRev);
+
   useEffect(() => {
     fetchCategories();
-  }, []);
+  }, [categoriesRev]);
 
   const expenseCategories = useMemo(
     () => categories.filter((c) => c.type === 'expense'),
