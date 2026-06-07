@@ -294,13 +294,15 @@ pub async fn export_csv(
     let where_clause = conditions.join(" AND ");
     let sql = format!(
         "SELECT DISTINCT ON (t.date, t.created_at, t.id)
-           t.note, t.date, c.name as category_name, t.amount, t.type, t.location,
+           t.note, t.date, c.name as category_name, s.name as subcategory_name,
+           t.amount, t.type, t.location,
            COALESCE(string_agg(DISTINCT tm.member_name, ', '), '') as members
          FROM transactions t
          LEFT JOIN categories c ON c.id = t.category_id
+         LEFT JOIN subcategories s ON s.id = t.subcategory_id
          LEFT JOIN transaction_members tm ON tm.transaction_id = t.id
          WHERE {}
-         GROUP BY t.id, t.note, t.date, c.name, t.amount, t.type, t.location, t.created_at
+         GROUP BY t.id, t.note, t.date, c.name, s.name, t.amount, t.type, t.location, t.created_at
          ORDER BY t.date ASC, t.created_at ASC, t.id",
         where_clause
     );
@@ -317,11 +319,12 @@ pub async fn export_csv(
 
     let rows = query.fetch_all(pool).await?;
 
-    let mut csv = String::from("\u{FEFF}备注,日期,分类,金额,收支,流水,月份,人员,地点,父记录\n");
+    let mut csv = String::from("\u{FEFF}备注,日期,分类,子分类,金额,收支,流水,月份,人员,地点\n");
     for row in &rows {
         let note = row.note.as_deref().unwrap_or("");
         let date_str = row.date.format("%Y/%m/%d").to_string();
         let cat = row.category_name.as_deref().unwrap_or("");
+        let sub = row.subcategory_name.as_deref().unwrap_or("");
         let amount_f = row.amount.to_string();
         let type_label = if row.r#type == "income" { "收入" } else { "支出" };
         let flow = if row.r#type == "income" {
@@ -335,12 +338,13 @@ pub async fn export_csv(
 
         let escaped_note = csv_escape(note);
         let escaped_cat = csv_escape(cat);
+        let escaped_sub = csv_escape(sub);
         let escaped_members = csv_escape(members);
         let escaped_location = csv_escape(location);
 
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},\n",
-            escaped_note, date_str, escaped_cat, amount_f, type_label, flow, month, escaped_members, escaped_location
+            "{},{},{},{},{},{},{},{},{},{}\n",
+            escaped_note, date_str, escaped_cat, escaped_sub, amount_f, type_label, flow, month, escaped_members, escaped_location
         ));
     }
 
@@ -360,6 +364,7 @@ struct ExportRow {
     note: Option<String>,
     date: chrono::NaiveDate,
     category_name: Option<String>,
+    subcategory_name: Option<String>,
     amount: Decimal,
     r#type: String,
     location: Option<String>,
@@ -661,6 +666,24 @@ pub async fn import_csv(
     let content = content.trim_start_matches('\u{feff}');
     let mut reader = csv::Reader::from_reader(content.as_bytes());
 
+    // Map columns by header name so we support both the old layout and the new
+    // export format that inserts a 「子分类」 column at index 3. Fallbacks match
+    // the legacy positional layout.
+    let header = reader.headers().ok().cloned();
+    let find = |name: &str| -> Option<usize> {
+        header
+            .as_ref()
+            .and_then(|h| h.iter().position(|c| c.trim() == name))
+    };
+    let idx_note = find("备注").unwrap_or(0);
+    let idx_date = find("日期").unwrap_or(1);
+    let idx_cat = find("分类").unwrap_or(2);
+    let idx_sub = find("子分类");
+    let idx_amount = find("金额").unwrap_or(3);
+    let idx_type = find("收支").unwrap_or(4);
+    let idx_member = find("人员").unwrap_or(7);
+    let idx_location = find("地点").unwrap_or(8);
+
     let mut total = 0usize;
     let mut imported = 0usize;
     let mut skipped = 0usize;
@@ -680,13 +703,18 @@ pub async fn import_csv(
             }
         };
 
-        let note = record.get(0).unwrap_or("").trim().to_string();
-        let date_str = record.get(1).unwrap_or("").trim();
-        let csv_category = record.get(2).unwrap_or("").trim().to_string();
-        let amount_str = record.get(3).unwrap_or("").trim();
-        let type_str = record.get(4).unwrap_or("").trim();
-        let member_str = record.get(7).unwrap_or("").trim().to_string();
-        let location = record.get(8).unwrap_or("").trim().to_string();
+        let note = record.get(idx_note).unwrap_or("").trim().to_string();
+        let date_str = record.get(idx_date).unwrap_or("").trim();
+        let csv_category = record.get(idx_cat).unwrap_or("").trim().to_string();
+        let csv_sub = idx_sub
+            .and_then(|i| record.get(i))
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let amount_str = record.get(idx_amount).unwrap_or("").trim();
+        let type_str = record.get(idx_type).unwrap_or("").trim();
+        let member_str = record.get(idx_member).unwrap_or("").trim().to_string();
+        let location = record.get(idx_location).unwrap_or("").trim().to_string();
 
         let date = match chrono::NaiveDate::parse_from_str(date_str, "%Y/%m/%d") {
             Ok(d) => d,
@@ -716,22 +744,39 @@ pub async fn import_csv(
             }
         };
 
-        let (cat_name, sub_name) = classify_transaction(&csv_category, &note, txn_type);
-
-        let cat_key = (cat_name.to_string(), txn_type.to_string());
-        let (category_id, subcategory_id) = if let Some(info) = cat_lookup.get(&cat_key) {
-            let sid = sub_name.and_then(|name| info.subs.get(name).copied());
+        // Prefer the explicit 分类/子分类 columns when they match real categories
+        // (i.e. our own export format round-trips exactly). Otherwise fall back to
+        // keyword-based classification for free-form / external CSVs.
+        let direct = cat_lookup.get(&(csv_category.clone(), txn_type.to_string()));
+        let (category_id, subcategory_id) = if let Some(info) = direct {
+            let sid = if !csv_sub.is_empty() {
+                info.subs.get(&csv_sub).copied()
+            } else {
+                None
+            };
+            // 子分类列为空或未匹配时，再用关键词分类补充推断子分类
+            let sid = sid.or_else(|| {
+                let (_, kw_sub) = classify_transaction(&csv_category, &note, txn_type);
+                kw_sub.and_then(|name| info.subs.get(name).copied())
+            });
             (info.id, sid)
         } else {
-            let fallback = if txn_type == "expense" { "其他支出" } else { "其他收入" };
-            let fb_key = (fallback.to_string(), txn_type.to_string());
-            if let Some(info) = cat_lookup.get(&fb_key) {
-                let sid = info.subs.get("其他").copied();
+            let (cat_name, sub_name) = classify_transaction(&csv_category, &note, txn_type);
+            let cat_key = (cat_name.to_string(), txn_type.to_string());
+            if let Some(info) = cat_lookup.get(&cat_key) {
+                let sid = sub_name.and_then(|name| info.subs.get(name).copied());
                 (info.id, sid)
             } else {
-                errors.push(format!("行 {}: 未找到匹配分类", row));
-                skipped += 1;
-                continue;
+                let fallback = if txn_type == "expense" { "其他支出" } else { "其他收入" };
+                let fb_key = (fallback.to_string(), txn_type.to_string());
+                if let Some(info) = cat_lookup.get(&fb_key) {
+                    let sid = info.subs.get("其他").copied();
+                    (info.id, sid)
+                } else {
+                    errors.push(format!("行 {}: 未找到匹配分类", row));
+                    skipped += 1;
+                    continue;
+                }
             }
         };
 
