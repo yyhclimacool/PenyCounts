@@ -1,5 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import dayjs from 'dayjs';
 import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
@@ -13,10 +12,6 @@ import {
   CalendarDays,
   Wallet,
   HeartPulse,
-  ArrowRight,
-  MapPin,
-  ReceiptText,
-  Plus,
 } from 'lucide-react';
 import {
   Card,
@@ -39,8 +34,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import * as statsService from '@/services/stats';
-import * as transactionsService from '@/services/transactions';
-import * as categoriesService from '@/services/categories';
 import { useDataStore } from '@/stores/dataStore';
 import type {
   MonthlyTrend,
@@ -51,10 +44,8 @@ import type {
   DailyTrend,
   YearlyTrend,
   DailyHeatmap,
-  Transaction,
-  Category,
 } from '@/types';
-import { formatCurrency, formatDate } from '@/utils/format';
+import { formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import { TransactionListDialog } from '@/components/TransactionListDialog';
 
@@ -183,19 +174,11 @@ function TypeToggle({
   value,
   onChange,
 }: {
-  value: 'all' | 'expense' | 'income';
-  onChange: (v: 'all' | 'expense' | 'income') => void;
+  value: 'expense' | 'income';
+  onChange: (v: 'expense' | 'income') => void;
 }) {
   return (
     <div className="flex rounded-lg border p-0.5">
-      <Button
-        variant={value === 'all' ? 'default' : 'ghost'}
-        size="sm"
-        className={cn('h-7 text-xs', value === 'all' && 'bg-primary hover:bg-primary/90')}
-        onClick={() => onChange('all')}
-      >
-        全部
-      </Button>
       <Button
         variant={value === 'expense' ? 'default' : 'ghost'}
         size="sm"
@@ -216,35 +199,190 @@ function TypeToggle({
   );
 }
 
+/* ------------------------------------------------------------------ */
+/*  Monthly trend with month → day drill-down (universalTransition)    */
+/* ------------------------------------------------------------------ */
+
+const TYPE_LABEL = { expense: '支出', income: '收入' } as const;
+
+function MonthlyDrilldownChart({
+  year,
+  type,
+  data,
+  onDayClick,
+}: {
+  year: number;
+  type: 'expense' | 'income';
+  data: MonthlyTrend[];
+  onDayClick: (date: string, title: string) => void;
+}) {
+  const chartRef = useRef<ReactECharts>(null);
+  const [drilledMonth, setDrilledMonth] = useState<number | null>(null);
+
+  const color = type === 'expense' ? EXPENSE_COLOR : INCOME_COLOR;
+  const label = TYPE_LABEL[type];
+
+  // A single bar series whose data rows carry [x, y, groupId, childGroupId].
+  // childGroupId on the month rows matches groupId on the day rows so ECharts
+  // can morph one month bar into that month's daily bars (and back).
+  const buildOption = useCallback(
+    (rows: (string | number)[][]): echarts.EChartsCoreOption => ({
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        ...TOOLTIP_STYLE,
+        formatter: (params: any) => {
+          const items = Array.isArray(params) ? params : [params];
+          const p = items[0];
+          const v = Array.isArray(p?.value) ? p.value[1] : p?.value;
+          return `<div style="font-weight:500;margin-bottom:4px">${p?.axisValue}</div><div style="display:flex;align-items:center;gap:6px;line-height:1.8"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color}"></span><span style="color:#6b7280">${label}:</span><span style="font-weight:500">${formatCurrency(v ?? 0, 'CNY')}</span></div>`;
+        },
+      },
+      grid: { left: 60, right: 16, top: 16, bottom: 28 },
+      xAxis: {
+        type: 'category',
+        axisPointer: { type: 'shadow' },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 11 },
+      },
+      yAxis: {
+        type: 'value',
+        name: '金额',
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 12, formatter: formatYAxis },
+        splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
+      },
+      animationDurationUpdate: 500,
+      series: [
+        {
+          type: 'bar',
+          name: label,
+          dimensions: ['x', 'y', 'groupId', 'childGroupId'],
+          encode: { x: 'x', y: 'y', itemGroupId: 'groupId', itemChildGroupId: 'childGroupId' },
+          data: rows,
+          itemStyle: { color, borderRadius: [4, 4, 0, 0] },
+          universalTransition: { enabled: true, divideShape: 'clone' },
+        },
+      ],
+    }),
+    [color, label],
+  );
+
+  const rootRows = useMemo<(string | number)[][]>(
+    () =>
+      MONTHS.map((m) => {
+        const row = data.find((t) => t.month === m);
+        const val = parseFloat(row?.[type] ?? '0') || 0;
+        return [`${m}月`, val, 'year', `m-${m}`];
+      }),
+    [data, type],
+  );
+
+  const rootOption = useMemo(() => buildOption(rootRows), [buildOption, rootRows]);
+
+  // Year / type / data change → snap back to the monthly root level.
+  useEffect(() => {
+    setDrilledMonth(null);
+  }, [year, type, data]);
+
+  const goToMonth = useCallback(
+    async (m: number) => {
+      const daily = await statsService
+        .dailyTrend({ year, month: m })
+        .catch(() => [] as DailyTrend[]);
+      const days = daysInMonth(year, m);
+      const rows: (string | number)[][] = Array.from({ length: days }, (_, i) => {
+        const day = i + 1;
+        const r = daily.find((d) => d.day === day);
+        const val = parseFloat(r?.[type] ?? '0') || 0;
+        return [`${day}日`, val, `m-${m}`];
+      });
+      chartRef.current?.getEchartsInstance().setOption(buildOption(rows));
+      setDrilledMonth(m);
+    },
+    [year, type, buildOption],
+  );
+
+  const goBack = useCallback(() => {
+    chartRef.current?.getEchartsInstance().setOption(rootOption);
+    setDrilledMonth(null);
+  }, [rootOption]);
+
+  const handleClick = useCallback(
+    (params: any) => {
+      if (params.componentType !== 'series') return;
+      const item = params.data;
+      if (drilledMonth == null) {
+        const childGroupId = Array.isArray(item) ? item[3] : undefined;
+        if (childGroupId) goToMonth(Number(String(childGroupId).replace('m-', '')));
+      } else {
+        const day = params.dataIndex + 1;
+        const mm = String(drilledMonth).padStart(2, '0');
+        const dd = String(day).padStart(2, '0');
+        onDayClick(`${year}-${mm}-${dd}`, `${drilledMonth}月${day}日 交易记录`);
+      }
+    },
+    [drilledMonth, goToMonth, onDayClick, year],
+  );
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-base font-semibold flex items-center gap-2">
+          <CalendarDays className="size-4 text-primary" />
+          {drilledMonth == null ? '每月趋势' : `${drilledMonth}月每日${label}`}
+        </h2>
+        {drilledMonth != null && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={goBack}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <ChevronLeft className="size-4 mr-1" />
+            返回年度
+          </Button>
+        )}
+      </div>
+      {data.length === 0 ? (
+        <EmptyState message="该年度暂无数据" />
+      ) : (
+        <Card>
+          <CardContent className="pt-6">
+            <ReactECharts
+              ref={chartRef}
+              option={rootOption}
+              style={{ height: 320 }}
+              notMerge
+              onEvents={{ click: handleClick }}
+            />
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 /* ================================================================== */
 /*  Tab 1 — Overview / Summary Analysis                                */
 /* ================================================================== */
 
-function OverviewTab() {
-  const navigate = useNavigate();
-  const currentYear = dayjs().year();
-  const currentMonth = dayjs().month() + 1;
+function OverviewTab({ year }: { year: number }) {
   const transactionsRev = useDataStore((s) => s.transactionsRev);
-  const categoriesRev = useDataStore((s) => s.categoriesRev);
 
-  const [year, setYear] = useState(currentYear);
-  const [viewType, setViewType] = useState<'all' | 'expense' | 'income'>('all');
+  const [viewType, setViewType] = useState<'expense' | 'income'>('expense');
   const [monthlyData, setMonthlyData] = useState<MonthlyTrend[]>([]);
   const [monthlyLoading, setMonthlyLoading] = useState(true);
 
-  const [selectedMonth, setSelectedMonth] = useState(String(currentMonth));
-  const [dailyData, setDailyData] = useState<DailyTrend[]>([]);
-  const [dailyLoading, setDailyLoading] = useState(true);
-
+  // Yearly totals power the overview cards (year-over-year comparison).
   const [yearlyData, setYearlyData] = useState<YearlyTrend[]>([]);
-  const [yearlyLoading, setYearlyLoading] = useState(true);
   const [clickedRange, setClickedRange] = useState<{ start: string; end: string; title: string } | null>(null);
 
-  // Merged-in dashboard widgets: calendar heatmap + recent transactions
+  // Calendar heatmap widget
   const [heatmapData, setHeatmapData] = useState<DailyHeatmap[]>([]);
   const [heatmapType, setHeatmapType] = useState<'expense' | 'income'>('expense');
-  const [recentTx, setRecentTx] = useState<Transaction[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
   const [clickedDate, setClickedDate] = useState<string | null>(null);
 
   useEffect(() => {
@@ -255,22 +393,6 @@ function OverviewTab() {
       .catch(() => !cancelled && setHeatmapData([]));
     return () => { cancelled = true; };
   }, [year, transactionsRev]);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      transactionsService.list({ per_page: 5 }),
-      categoriesService.getAll(),
-    ])
-      .then(([txData, allCats]) => {
-        if (!cancelled) {
-          setRecentTx(txData.data);
-          setCategories(allCats);
-        }
-      })
-      .catch(() => { if (!cancelled) { setRecentTx([]); setCategories([]); } });
-    return () => { cancelled = true; };
-  }, [transactionsRev, categoriesRev]);
 
   useEffect(() => {
     let cancelled = false;
@@ -285,61 +407,12 @@ function OverviewTab() {
 
   useEffect(() => {
     let cancelled = false;
-    setDailyLoading(true);
-    const m = Number(selectedMonth);
-    statsService
-      .dailyTrend({ year, month: m })
-      .then((d) => !cancelled && setDailyData(d))
-      .catch(() => !cancelled && setDailyData([]))
-      .finally(() => !cancelled && setDailyLoading(false));
-    return () => { cancelled = true; };
-  }, [year, selectedMonth, transactionsRev]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setYearlyLoading(true);
     statsService
       .yearlyTrend()
       .then((d) => !cancelled && setYearlyData(d))
-      .catch(() => !cancelled && setYearlyData([]))
-      .finally(() => !cancelled && setYearlyLoading(false));
+      .catch(() => !cancelled && setYearlyData([]));
     return () => { cancelled = true; };
   }, [transactionsRev]);
-
-  const showIncome = viewType === 'all' || viewType === 'income';
-  const showExpense = viewType === 'all' || viewType === 'expense';
-
-  const monthlyChartData = MONTHS.map((m) => {
-    const row = monthlyData.find((t) => t.month === m);
-    return {
-      month: m,
-      income: showIncome ? (parseFloat(row?.income ?? '0') || 0) : 0,
-      expense: showExpense ? (parseFloat(row?.expense ?? '0') || 0) : 0,
-    };
-  });
-
-  const dailyChartData = useMemo(() => {
-    const m = Number(selectedMonth);
-    const days = daysInMonth(year, m);
-    return Array.from({ length: days }, (_, i) => {
-      const day = i + 1;
-      const row = dailyData.find((d) => d.day === day);
-      return {
-        day,
-        income: showIncome ? (parseFloat(row?.income ?? '0') || 0) : 0,
-        expense: showExpense ? (parseFloat(row?.expense ?? '0') || 0) : 0,
-      };
-    });
-  }, [dailyData, year, selectedMonth, showIncome, showExpense]);
-
-  const dailyMonthIncome = dailyChartData.reduce((s, d) => s + d.income, 0);
-  const dailyMonthExpense = dailyChartData.reduce((s, d) => s + d.expense, 0);
-
-  const yearlyChartData = yearlyData.map((d) => ({
-    year: d.year,
-    income: showIncome ? (parseFloat(d.income) || 0) : 0,
-    expense: showExpense ? (parseFloat(d.expense) || 0) : 0,
-  }));
 
   // --- Year overview (independent of viewType) ---
   const currentYearData = yearlyData.find((y) => y.year === year);
@@ -356,19 +429,6 @@ function OverviewTab() {
   const healthRate = yearIncome > 0
     ? Math.max(0, Math.min(1, (yearIncome - yearExpense) / yearIncome))
     : 0;
-
-  // --- Recent transactions enriched with category info ---
-  const enrichedRecentTx = useMemo(() => {
-    const catMap = new Map(categories.map((c) => [c.id, c]));
-    const subMap = new Map(
-      categories.flatMap((c) => (c.subcategories ?? []).map((s) => [s.id, s])),
-    );
-    return recentTx.map((tx) => ({
-      ...tx,
-      category: catMap.get(tx.category_id),
-      subcategory: tx.subcategory_id ? subMap.get(tx.subcategory_id) : undefined,
-    }));
-  }, [recentTx, categories]);
 
   // --- Calendar heatmap ---
   const heatmapChartData = useMemo(() =>
@@ -476,214 +536,9 @@ function OverviewTab() {
     }],
   }), [healthRate]);
 
-  const monthlyBarOption = useMemo((): echarts.EChartsCoreOption => {
-    const series: any[] = [];
-    const legendData: string[] = [];
-    if (showIncome) {
-      legendData.push('收入');
-      series.push({
-        name: '收入',
-        type: 'bar',
-        data: monthlyChartData.map((d) => d.income),
-        itemStyle: { color: INCOME_COLOR, borderRadius: [4, 4, 0, 0] },
-        barGap: '20%',
-      });
-    }
-    if (showExpense) {
-      legendData.push('支出');
-      series.push({
-        name: '支出',
-        type: 'bar',
-        data: monthlyChartData.map((d) => d.expense),
-        itemStyle: { color: EXPENSE_COLOR, borderRadius: [4, 4, 0, 0] },
-        barGap: '20%',
-      });
-    }
-    if (showIncome && showExpense) {
-      legendData.push('结余');
-      series.push({
-        name: '结余',
-        type: 'line',
-        yAxisIndex: 1,
-        data: monthlyChartData.map((d) => d.income - d.expense),
-        smooth: true,
-        symbol: 'circle',
-        symbolSize: 6,
-        lineStyle: { width: 2 },
-        itemStyle: { color: '#0062FF' },
-      });
-    }
-    return {
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'cross', crossStyle: { color: '#999' } },
-        ...TOOLTIP_STYLE,
-        formatter: tooltipFormatter,
-      },
-      toolbox: {
-        right: 8,
-        top: 4,
-        itemGap: 10,
-        feature: {
-          dataView: { show: true, readOnly: false },
-          magicType: { show: true, type: ['line', 'bar'] },
-          restore: { show: true },
-          saveAsImage: { show: true },
-        },
-      },
-      legend: { data: legendData, bottom: 0, textStyle: { fontSize: 12 } },
-      grid: { left: 60, right: 60, top: 56, bottom: 36 },
-      xAxis: {
-        type: 'category',
-        data: MONTHS.map((m) => `${m}月`),
-        axisPointer: { type: 'shadow' },
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { fontSize: 12 },
-      },
-      yAxis: [
-        {
-          type: 'value',
-          name: '金额',
-          axisLine: { show: false },
-          axisTick: { show: false },
-          axisLabel: { fontSize: 12, formatter: formatYAxis },
-          splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
-        },
-        {
-          type: 'value',
-          name: '结余',
-          axisLine: { show: false },
-          axisTick: { show: false },
-          axisLabel: { fontSize: 12, formatter: formatYAxis },
-          splitLine: { show: false },
-        },
-      ],
-      series,
-    };
-  }, [monthlyChartData, showIncome, showExpense]);
-
-  const dailyAreaOption = useMemo((): echarts.EChartsCoreOption => {
-    const series: any[] = [];
-    if (showExpense) {
-      series.push({
-        name: '支出',
-        type: 'line',
-        data: dailyChartData.map((d) => d.expense),
-        smooth: false,
-        symbol: 'emptyCircle',
-        symbolSize: 6,
-        lineStyle: { color: EXPENSE_COLOR, width: 2 },
-        areaStyle: {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(239,68,68,0.2)' },
-            { offset: 1, color: 'rgba(239,68,68,0)' },
-          ]),
-        },
-        itemStyle: { color: EXPENSE_COLOR },
-      });
-    }
-    if (showIncome) {
-      series.push({
-        name: '收入',
-        type: 'line',
-        data: dailyChartData.map((d) => d.income),
-        smooth: false,
-        symbol: 'emptyCircle',
-        symbolSize: 6,
-        lineStyle: { color: INCOME_COLOR, width: 2 },
-        areaStyle: {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(16,185,129,0.2)' },
-            { offset: 1, color: 'rgba(16,185,129,0)' },
-          ]),
-        },
-        itemStyle: { color: INCOME_COLOR },
-      });
-    }
-    return {
-      tooltip: {
-        trigger: 'axis',
-        ...TOOLTIP_STYLE,
-        formatter: (params: any) => {
-          const items = Array.isArray(params) ? params : [params];
-          let html = `<div style="font-weight:500;margin-bottom:4px">${selectedMonth}月${items[0]?.axisValue}</div>`;
-          items.forEach((item: any) => {
-            html += `<div style="display:flex;align-items:center;gap:6px;line-height:1.8"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${item.color}"></span><span style="color:#6b7280">${item.seriesName}:</span><span style="font-weight:500">${formatCurrency(item.value, 'CNY')}</span></div>`;
-          });
-          return html;
-        },
-      },
-      legend: { bottom: 0, textStyle: { fontSize: 12 } },
-      grid: { left: 55, right: 16, top: 16, bottom: 36 },
-      xAxis: {
-        type: 'category',
-        data: dailyChartData.map((d) => `${d.day}日`),
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { fontSize: 11, interval: Math.floor(dailyChartData.length / 10) },
-      },
-      yAxis: {
-        type: 'value',
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { fontSize: 11, formatter: formatYAxis },
-        splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
-      },
-      series,
-    };
-  }, [dailyChartData, selectedMonth, showIncome, showExpense]);
-
-  const yearlyLineOption = useMemo((): echarts.EChartsCoreOption => {
-    const series: any[] = [];
-    if (showIncome) {
-      series.push({
-        name: '收入',
-        type: 'line',
-        data: yearlyChartData.map((d) => d.income),
-        smooth: false,
-        symbolSize: 8,
-        lineStyle: { color: INCOME_COLOR, width: 2.5 },
-        itemStyle: { color: INCOME_COLOR },
-      });
-    }
-    if (showExpense) {
-      series.push({
-        name: '支出',
-        type: 'line',
-        data: yearlyChartData.map((d) => d.expense),
-        smooth: false,
-        symbolSize: 8,
-        lineStyle: { color: EXPENSE_COLOR, width: 2.5 },
-        itemStyle: { color: EXPENSE_COLOR },
-      });
-    }
-    return {
-      tooltip: { trigger: 'axis', ...TOOLTIP_STYLE, formatter: tooltipFormatter },
-      legend: { bottom: 0, textStyle: { fontSize: 12 } },
-      grid: { left: 60, right: 16, top: 16, bottom: 36 },
-      xAxis: {
-        type: 'category',
-        data: yearlyChartData.map((d) => `${d.year}`),
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { fontSize: 12 },
-      },
-      yAxis: {
-        type: 'value',
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { fontSize: 12, formatter: formatYAxis },
-        splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
-      },
-      series,
-    };
-  }, [yearlyChartData, showIncome, showExpense]);
-
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center gap-3 justify-between">
-        <YearSelector year={year} onChange={setYear} />
+      <div className="flex flex-wrap items-center gap-3 justify-end">
         <TypeToggle value={viewType} onChange={setViewType} />
       </div>
 
@@ -757,31 +612,23 @@ function OverviewTab() {
         </Card>
       </div>
 
-      {/* Monthly Trend */}
-      <div className="flex flex-col gap-4">
-        <h2 className="text-base font-semibold flex items-center gap-2">
-          <CalendarDays className="size-4 text-primary" />
-          每月趋势
-        </h2>
-
-        {monthlyLoading ? (
+      {/* Monthly Trend (click a month to drill into its daily breakdown) */}
+      {monthlyLoading ? (
+        <div className="flex flex-col gap-4">
+          <h2 className="text-base font-semibold flex items-center gap-2">
+            <CalendarDays className="size-4 text-primary" />
+            每月趋势
+          </h2>
           <Spinner />
-        ) : monthlyData.length === 0 ? (
-          <EmptyState message="该年度暂无数据" />
-        ) : (
-          <>
-            <Card>
-              <CardContent className="pt-6">
-                <ReactECharts
-                  option={monthlyBarOption}
-                  style={{ height: 320 }}
-                  notMerge
-                />
-              </CardContent>
-            </Card>
-          </>
-        )}
-      </div>
+        </div>
+      ) : (
+        <MonthlyDrilldownChart
+          year={year}
+          type={viewType}
+          data={monthlyData}
+          onDayClick={(date, title) => setClickedRange({ start: date, end: date, title })}
+        />
+      )}
 
       {/* Calendar Heatmap */}
       <div className="flex flex-col gap-4">
@@ -845,173 +692,6 @@ function OverviewTab() {
         </Card>
       </div>
 
-      {/* Daily Trend */}
-      <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold flex items-center gap-2">
-            <CalendarDays className="size-4 text-primary" />
-            日趋势
-          </h2>
-          <MonthSelect value={selectedMonth} onChange={setSelectedMonth} allowAll={false} />
-        </div>
-
-        {dailyLoading ? (
-          <Spinner />
-        ) : dailyData.length === 0 ? (
-          <EmptyState message="该月暂无数据" />
-        ) : (
-          <>
-            <Card>
-              <CardContent className="pt-6">
-                <ReactECharts
-                  option={dailyAreaOption}
-                  style={{ height: 280 }}
-                  notMerge
-                  onEvents={{
-                    click: (params: any) => {
-                      const day = dailyChartData[params.dataIndex]?.day;
-                      if (day != null) {
-                        const m = String(selectedMonth).padStart(2, '0');
-                        const d = String(day).padStart(2, '0');
-                        const date = `${year}-${m}-${d}`;
-                        setClickedRange({ start: date, end: date, title: `${selectedMonth}月${day}日 交易记录` });
-                      }
-                    },
-                  }}
-                />
-              </CardContent>
-            </Card>
-
-            <div className="grid grid-cols-2 gap-4">
-              <Card>
-                <CardContent className="p-4">
-                  <p className="text-xs text-muted-foreground mb-1">{selectedMonth}月收入</p>
-                  <p className="text-xl font-bold text-income tabular-nums">
-                    {formatCurrency(dailyMonthIncome, 'CNY')}
-                  </p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="p-4">
-                  <p className="text-xs text-muted-foreground mb-1">{selectedMonth}月支出</p>
-                  <p className="text-xl font-bold text-expense tabular-nums">
-                    {formatCurrency(dailyMonthExpense, 'CNY')}
-                  </p>
-                </CardContent>
-              </Card>
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Yearly Trend */}
-      <div className="flex flex-col gap-4">
-        <h2 className="text-base font-semibold flex items-center gap-2">
-          <CalendarDays className="size-4 text-primary" />
-          年度趋势
-        </h2>
-
-        {yearlyLoading ? (
-          <Spinner />
-        ) : yearlyChartData.length === 0 ? (
-          <EmptyState message="暂无年度数据" />
-        ) : (
-          <Card>
-            <CardContent className="pt-6">
-              <ReactECharts
-                option={yearlyLineOption}
-                style={{ height: 300 }}
-                notMerge
-                onEvents={{
-                  click: (params: any) => {
-                    const y = yearlyChartData[params.dataIndex]?.year;
-                    if (y != null) {
-                      setClickedRange({ start: `${y}-01-01`, end: `${y}-12-31`, title: `${y}年 交易记录` });
-                    }
-                  },
-                }}
-              />
-            </CardContent>
-          </Card>
-        )}
-      </div>
-
-      {/* Recent Transactions */}
-      <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold flex items-center gap-2">
-            <ReceiptText className="size-4 text-primary" />
-            最近交易
-          </h2>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => navigate('/transactions')}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            查看全部
-            <ArrowRight className="size-4 ml-1" />
-          </Button>
-        </div>
-        <Card>
-          <CardContent className="pt-6">
-            {enrichedRecentTx.length === 0 ? (
-              <div className="flex flex-col items-center py-12 text-muted-foreground">
-                <ReceiptText className="size-10 mb-2 opacity-40" />
-                <p className="text-sm">暂无交易记录</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-3"
-                  onClick={() => navigate('/transactions?add=true')}
-                >
-                  <Plus className="size-4" />
-                  添加第一笔
-                </Button>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-0.5">
-                {enrichedRecentTx.map((tx) => (
-                  <div
-                    key={tx.id}
-                    className="flex items-center gap-3 py-2.5 px-2 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
-                    onClick={() => navigate('/transactions')}
-                  >
-                    <span className="text-lg size-8 flex items-center justify-center rounded-lg bg-muted/60 shrink-0">
-                      {tx.category?.icon ?? '📝'}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">
-                        {tx.category?.name ?? '未分类'}
-                        {tx.subcategory && (
-                          <span className="text-muted-foreground font-normal"> / {tx.subcategory.name}</span>
-                        )}
-                      </p>
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
-                        <span>{formatDate(tx.date)}</span>
-                        {tx.location && (
-                          <span className="inline-flex items-center gap-0.5">
-                            <MapPin className="size-3" />
-                            {tx.location}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <span className={cn(
-                      'text-sm font-semibold tabular-nums whitespace-nowrap',
-                      tx.type === 'income' ? 'text-income' : 'text-expense',
-                    )}>
-                      {tx.type === 'income' ? '+' : '-'}
-                      {formatCurrency(tx.amount, tx.currency)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
       {clickedRange && (
         <TransactionListDialog
           open={!!clickedRange}
@@ -1039,8 +719,7 @@ function OverviewTab() {
 /*  Tab 2 — Category Breakdown                                         */
 /* ================================================================== */
 
-function CategoryBreakdownTab() {
-  const [year, setYear] = useState(dayjs().year());
+function CategoryBreakdownTab({ year }: { year: number }) {
   const [month, setMonth] = useState('all');
   const [type, setType] = useState<'expense' | 'income'>('expense');
   const [data, setData] = useState<CategoryBreakdown[]>([]);
@@ -1252,7 +931,6 @@ function CategoryBreakdownTab() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
-        <YearSelector year={year} onChange={setYear} />
         <MonthSelect value={month} onChange={setMonth} />
         <div className="flex rounded-lg border p-0.5 ml-auto">
           <Button
@@ -1358,10 +1036,9 @@ function CategoryBreakdownTab() {
 /*  Tab 3 — Member Analysis                                            */
 /* ================================================================== */
 
-function MemberAnalysisTab() {
-  const [year, setYear] = useState(dayjs().year());
+function MemberAnalysisTab({ year }: { year: number }) {
   const [month, setMonth] = useState('all');
-  const [viewType, setViewType] = useState<'all' | 'expense' | 'income'>('all');
+  const [viewType, setViewType] = useState<'expense' | 'income'>('expense');
   const [data, setData] = useState<MemberBreakdown[]>([]);
   const [loading, setLoading] = useState(true);
   const transactionsRev = useDataStore((s) => s.transactionsRev);
@@ -1373,7 +1050,7 @@ function MemberAnalysisTab() {
       .memberBreakdown({
         year,
         ...(month !== 'all' && { month: Number(month) }),
-        ...(viewType !== 'all' && { type: viewType }),
+        type: viewType,
       })
       .then((d) => !cancelled && setData(d))
       .catch(() => !cancelled && setData([]))
@@ -1398,7 +1075,7 @@ function MemberAnalysisTab() {
     };
   });
 
-  const barColor = viewType === 'income' ? INCOME_COLOR : viewType === 'expense' ? EXPENSE_COLOR : '#0062FF';
+  const barColor = viewType === 'income' ? INCOME_COLOR : EXPENSE_COLOR;
 
   const barOption = useMemo((): echarts.EChartsCoreOption => {
     const hex = barColor.replace('#', '');
@@ -1429,7 +1106,7 @@ function MemberAnalysisTab() {
       },
       series: [
         {
-          name: viewType === 'income' ? '收入' : viewType === 'expense' ? '支出' : '金额',
+          name: viewType === 'income' ? '收入' : '支出',
           type: 'bar',
           data: barData.map((d, i) => {
             const opacity = 1 - (i / Math.max(barData.length - 1, 1)) * 0.6;
@@ -1460,10 +1137,7 @@ function MemberAnalysisTab() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3 justify-between">
-        <div className="flex items-center gap-3">
-          <YearSelector year={year} onChange={setYear} />
-          <MonthSelect value={month} onChange={setMonth} />
-        </div>
+        <MonthSelect value={month} onChange={setMonth} />
         <TypeToggle value={viewType} onChange={setViewType} />
       </div>
 
@@ -1490,9 +1164,8 @@ function MemberAnalysisTab() {
 /*  Tab 4 — Social Gifts Analysis                                      */
 /* ================================================================== */
 
-function SocialGiftsTab() {
-  const [year, setYear] = useState(dayjs().year());
-  const [viewType, setViewType] = useState<'all' | 'expense' | 'income'>('all');
+function SocialGiftsTab({ year }: { year: number }) {
+  const [viewType, setViewType] = useState<'expense' | 'income'>('expense');
   const [data, setData] = useState<SocialSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const transactionsRev = useDataStore((s) => s.transactionsRev);
@@ -1509,8 +1182,8 @@ function SocialGiftsTab() {
     return () => { cancelled = true; };
   }, [year, transactionsRev, socialGiftsRev]);
 
-  const showGiven = viewType === 'all' || viewType === 'expense';
-  const showReceived = viewType === 'all' || viewType === 'income';
+  const showGiven = viewType === 'expense';
+  const showReceived = viewType === 'income';
 
   const totalGiven = data.reduce(
     (s, d) => s + (parseFloat(d.given) || 0),
@@ -1619,8 +1292,7 @@ function SocialGiftsTab() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3 justify-between">
-        <YearSelector year={year} onChange={setYear} />
+      <div className="flex flex-wrap items-center gap-3 justify-end">
         <TypeToggle value={viewType} onChange={setViewType} />
       </div>
 
@@ -1737,9 +1409,15 @@ function SocialGiftsTab() {
 /* ================================================================== */
 
 export default function StatisticsPage() {
+  // Single source of truth for the selected year, shared across every tab.
+  const [year, setYear] = useState(dayjs().year());
+
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 max-w-5xl mx-auto">
-      <h1 className="text-2xl font-bold tracking-tight">统计分析</h1>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold tracking-tight">统计分析</h1>
+        <YearSelector year={year} onChange={setYear} />
+      </div>
 
       <Tabs defaultValue="overview">
         <TabsList className="w-full grid grid-cols-4">
@@ -1758,16 +1436,16 @@ export default function StatisticsPage() {
         </TabsList>
 
         <TabsContent value="overview">
-          <OverviewTab />
+          <OverviewTab year={year} />
         </TabsContent>
         <TabsContent value="category">
-          <CategoryBreakdownTab />
+          <CategoryBreakdownTab year={year} />
         </TabsContent>
         <TabsContent value="member">
-          <MemberAnalysisTab />
+          <MemberAnalysisTab year={year} />
         </TabsContent>
         <TabsContent value="social">
-          <SocialGiftsTab />
+          <SocialGiftsTab year={year} />
         </TabsContent>
       </Tabs>
     </div>
