@@ -221,8 +221,16 @@ pub async fn get_chat_history(
     family_id: Uuid,
 ) -> Result<Vec<ChatMessage>, AppError> {
     tracing::debug!(family_id = %family_id, "svc::get_chat_history: querying");
+    // Only return user-facing prose. Internal tool-call rows (role='tool' and
+    // assistant turns carrying only tool_calls) are persisted for AI context but
+    // must not surface in the chat UI.
     let messages = sqlx::query_as::<_, ChatMessage>(
-        "SELECT * FROM chat_messages WHERE family_id = $1 ORDER BY created_at ASC",
+        "SELECT * FROM chat_messages
+         WHERE family_id = $1
+           AND role IN ('user', 'assistant')
+           AND tool_calls IS NULL
+           AND content <> ''
+         ORDER BY created_at ASC",
     )
     .bind(family_id)
     .fetch_all(pool)
@@ -332,6 +340,7 @@ pub async fn chat_stream(
          - **批量记账**: 用户一次描述多笔时（如「打车20，买菜50，工资到账8000」），把每一笔拆开，为每一笔分别调用一次 create_transaction（可在同一轮发起多个调用），全部记完后用列表汇总确认\n\
          - **type**: income 或 expense，根据语义判断\n\
          - **category_name**: 从可用分类中选择最匹配的\n\
+         - **subcategory_name**: 只能从上面「可用分类（含子分类）」中、所选 category_name 名下列出的子分类里挑选，不要填其它一级分类下的子分类\n\
          - **date**: 格式 YYYY-MM-DD。「今天」= {today}，「昨天」= 前一天\n\
          - 如果缺少 type 或 amount，追问用户\n\
          - 如果缺少 date，默认今天 ({today})\n\n\
@@ -341,7 +350,7 @@ pub async fn chat_stream(
          - 「送张三结婚红包」→ type=given, person_name=张三, occasion=结婚\n\
          - 「收到李四的生日礼金」→ type=received, person_name=李四, occasion=生日\n\n\
          ## 行为准则:\n\
-         1. 不要在回复中输出 JSON，直接调用工具\n\
+         1. 不要在回复中输出 JSON，直接调用工具；记账/改账/删账/记人情必须真正调用对应工具完成。绝不要自己编造或复述「✅ 记账成功」「✅ 人情记录成功」「✅ 已更新」「✅ 已删除」之类的结果文本——这些只由系统在工具执行成功后返回，你的文字回复只做简短的中文确认（如「已为您记录…」）\n\
          2. 如果用户只是闲聊或问问题，正常回答\n\
          3. 你可以在一次对话中连续调用多个工具（如先查后删）\n\
          4. 删除和修改操作前，如果不确定是哪条记录，先查询确认\n\
@@ -370,12 +379,64 @@ pub async fn chat_stream(
         "content": system_prompt,
     })];
 
+    // Rebuild a faithful OpenAI-format history including tool calls and tool
+    // results. A text-only history (assistant prose with no tool context) taught
+    // weak models that "recording" just means replying with a confirmation
+    // sentence — so they stopped calling the tools. Replaying the real chain
+    // (user → assistant[tool_calls] → tool → assistant) keeps them on track.
+    let mut history_msgs: Vec<serde_json::Value> = Vec::new();
     for msg in history.into_iter().rev() {
-        messages.push(serde_json::json!({
-            "role": msg.role,
-            "content": msg.content,
-        }));
+        match msg.role.as_str() {
+            "tool" => {
+                history_msgs.push(serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": msg.tool_call_id.unwrap_or_default(),
+                    "content": msg.content,
+                }));
+            }
+            "assistant" => {
+                // Strip any legacy "✅ 记账成功！…" echo blocks from older rows.
+                let content = strip_tool_echoes(&msg.content);
+                let tool_calls = msg
+                    .tool_calls
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+
+                let mut m = serde_json::json!({ "role": "assistant" });
+                if !content.is_empty() {
+                    m["content"] = serde_json::Value::String(content.clone());
+                }
+                match tool_calls {
+                    Some(tc) => m["tool_calls"] = tc,
+                    None if content.is_empty() => continue, // nothing useful
+                    None => {}
+                }
+                history_msgs.push(m);
+            }
+            _ => {
+                if msg.content.trim().is_empty() {
+                    continue;
+                }
+                history_msgs.push(serde_json::json!({
+                    "role": "user",
+                    "content": msg.content,
+                }));
+            }
+        }
     }
+
+    // The 20-message window may begin in the middle of a tool turn, leaving
+    // leading `tool` messages whose parent assistant `tool_calls` fell outside
+    // the window. The API rejects a tool message without a preceding tool call,
+    // so drop those orphans.
+    while matches!(
+        history_msgs.first().and_then(|m| m.get("role")).and_then(|r| r.as_str()),
+        Some("tool")
+    ) {
+        history_msgs.remove(0);
+    }
+
+    messages.extend(history_msgs);
 
     let tools = serde_json::json!([
         {
@@ -656,7 +717,9 @@ pub async fn chat_stream(
 
     let stream = async_stream::stream! {
         let client = reqwest::Client::new();
-        let mut full_response = String::new();
+        // Messages to persist for this turn, in order, so the next request can
+        // replay the full tool-call chain: (role, content, tool_calls, tool_call_id).
+        let mut persist: Vec<(&'static str, String, Option<String>, Option<String>)> = Vec::new();
 
         // Loop guard: weak models often re-issue the *same* tool call repeatedly
         // and never converge. We cache executed signatures so duplicates don't
@@ -784,11 +847,12 @@ pub async fn chat_stream(
                 }
             }
 
-            full_response.push_str(&turn_content);
-
-            // No tool calls → agent is done
+            // No tool calls → agent is done; this turn's prose is the final answer.
             if tool_calls.is_empty() {
                 tracing::debug!(iteration, "agent loop: no tool calls, done");
+                if !turn_content.trim().is_empty() {
+                    persist.push(("assistant", turn_content.clone(), None, None));
+                }
                 break;
             }
 
@@ -814,12 +878,16 @@ pub async fn chat_stream(
                 })
             }).collect();
 
+            let tc_array = serde_json::Value::Array(tc_json);
+            let tc_string = serde_json::to_string(&tc_array).ok();
+
             let mut assistant_msg = serde_json::json!({ "role": "assistant" });
             if !turn_content.is_empty() {
                 assistant_msg["content"] = serde_json::Value::String(turn_content.clone());
             }
-            assistant_msg["tool_calls"] = serde_json::Value::Array(tc_json);
+            assistant_msg["tool_calls"] = tc_array;
             messages.push(assistant_msg);
+            persist.push(("assistant", turn_content.clone(), tc_string, None));
 
             // Execute each tool call and append results
             for (tc_id, tc_name, tc_args) in &tool_calls {
@@ -837,11 +905,15 @@ pub async fn chat_stream(
                 if is_read_only && !executed_signatures.insert(format!("{}|{}", tc_name, tc_args)) {
                     tracing::warn!(tool = %tc_name, args = %tc_args, "agent loop: duplicate tool call, skipping execution");
                     force_final = true;
+                    let dup_note = "（已用相同条件查询过，结果见上文。请不要再调用工具，直接根据上面的数据用中文回答用户的问题。）";
                     messages.push(serde_json::json!({
                         "role": "tool",
                         "tool_call_id": tc_id,
-                        "content": "（已用相同条件查询过，结果见上文。请不要再调用工具，直接根据上面的数据用中文回答用户的问题。）",
+                        "content": dup_note,
                     }));
+                    // Persist so the assistant tool_calls row above keeps a
+                    // matching tool response (every tool_call needs one).
+                    persist.push(("tool", dup_note.to_string(), None, Some(tc_id.clone())));
                     continue;
                 }
 
@@ -851,7 +923,6 @@ pub async fn chat_stream(
                     "create_transaction" => {
                         match execute_create_transaction(&pool_clone, user_id, family_id, tc_args).await {
                             Ok(summary) => {
-                                full_response.push_str(&summary);
                                 let result_json = serde_json::json!({ "success": true, "summary": summary });
                                 yield Ok(Event::default().event("tool_result").data(
                                     serde_json::to_string(&result_json).unwrap_or_default()
@@ -876,7 +947,6 @@ pub async fn chat_stream(
                     "delete_transaction" => {
                         match execute_delete_transaction(&pool_clone, family_id, tc_args).await {
                             Ok(summary) => {
-                                full_response.push_str(&summary);
                                 let result_json = serde_json::json!({ "success": true, "summary": summary });
                                 yield Ok(Event::default().event("tool_result").data(
                                     serde_json::to_string(&result_json).unwrap_or_default()
@@ -895,7 +965,6 @@ pub async fn chat_stream(
                     "update_transaction" => {
                         match execute_update_transaction(&pool_clone, user_id, family_id, tc_args).await {
                             Ok(summary) => {
-                                full_response.push_str(&summary);
                                 let result_json = serde_json::json!({ "success": true, "summary": summary });
                                 yield Ok(Event::default().event("tool_result").data(
                                     serde_json::to_string(&result_json).unwrap_or_default()
@@ -920,7 +989,6 @@ pub async fn chat_stream(
                     "create_social_gift" => {
                         match execute_create_social_gift(&pool_clone, user_id, family_id, tc_args).await {
                             Ok(summary) => {
-                                full_response.push_str(&summary);
                                 let result_json = serde_json::json!({ "success": true, "summary": summary });
                                 yield Ok(Event::default().event("tool_result").data(
                                     serde_json::to_string(&result_json).unwrap_or_default()
@@ -948,6 +1016,7 @@ pub async fn chat_stream(
                 };
 
                 let _ = is_success;
+                persist.push(("tool", result_content.clone(), None, Some(tc_id.clone())));
                 messages.push(serde_json::json!({
                     "role": "tool",
                     "tool_call_id": tc_id,
@@ -960,23 +1029,81 @@ pub async fn chat_stream(
 
         yield Ok(Event::default().data("[DONE]"));
 
-        // Save assistant response
-        if !full_response.is_empty() {
+        // Persist the whole turn (assistant prose, tool calls, tool results) in
+        // order, so the next request replays a faithful tool-call history. The
+        // incremental millisecond offset guarantees a stable created_at ordering.
+        let base = Utc::now();
+        for (i, (role, content, tool_calls, tool_call_id)) in persist.into_iter().enumerate() {
             let _ = sqlx::query(
-                "INSERT INTO chat_messages (id, user_id, family_id, role, content, created_at)
-                 VALUES ($1, $2, $3, 'assistant', $4, $5)",
+                "INSERT INTO chat_messages
+                    (id, user_id, family_id, role, content, tool_calls, tool_call_id, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             )
             .bind(Uuid::new_v4())
             .bind(user_id)
             .bind(family_id)
-            .bind(&full_response)
-            .bind(Utc::now())
+            .bind(role)
+            .bind(content)
+            .bind(tool_calls)
+            .bind(tool_call_id)
+            .bind(base + chrono::Duration::milliseconds(i as i64))
             .execute(&pool_clone)
             .await;
         }
     };
 
     Ok(stream)
+}
+
+/// Remove tool-result summary blocks (e.g. "✅ 记账成功！…") that older
+/// assistant messages may still embed in their `content`. These echoes used to
+/// be concatenated into the saved assistant message; replaying them as history
+/// trained weak models to *fabricate* success text instead of calling the
+/// tools. Stripping them keeps only the model's own prose in the LLM context.
+fn strip_tool_echoes(content: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut in_echo = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        let is_marker = trimmed.starts_with("✅ 记账成功")
+            || trimmed.starts_with("✅ 人情记录成功")
+            || trimmed.starts_with("✅ 已成功删除")
+            || trimmed.starts_with("✅ 已更新交易记录");
+        if is_marker {
+            in_echo = true;
+            continue;
+        }
+
+        if in_echo {
+            if trimmed.is_empty() {
+                // Blank line ends the echo block.
+                in_echo = false;
+                continue;
+            }
+            let is_detail = trimmed.starts_with("支出 ")
+                || trimmed.starts_with("收入 ")
+                || trimmed.starts_with("分类:")
+                || trimmed.starts_with("日期:")
+                || trimmed.starts_with("时间:")
+                || trimmed.starts_with("成员:")
+                || trimmed.starts_with("备注:")
+                || trimmed.starts_with("对方:")
+                || trimmed.starts_with("事由:")
+                || trimmed.starts_with("送出 ")
+                || trimmed.starts_with("收到 ");
+            if is_detail {
+                continue;
+            }
+            // Not a detail line → the echo block is over; keep this line.
+            in_echo = false;
+        }
+
+        out.push(line);
+    }
+
+    out.join("\n").trim().to_string()
 }
 
 async fn execute_create_transaction(
@@ -1009,8 +1136,8 @@ async fn execute_create_transaction(
         .as_array()
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
 
-    // Resolve category
-    let category = sqlx::query_as::<_, Category>(
+    // Resolve category from the model-chosen name.
+    let mut category = sqlx::query_as::<_, Category>(
         "SELECT * FROM categories WHERE name = $1 AND (user_id IS NULL OR family_id = $2) LIMIT 1",
     )
     .bind(category_name)
@@ -1020,9 +1147,14 @@ async fn execute_create_transaction(
     .map_err(|e| format!("查询分类失败: {}", e))?
     .ok_or_else(|| format!("找不到分类「{}」", category_name))?;
 
-    // Resolve subcategory
+    // Resolve subcategory. Weak models frequently pick the right subcategory but
+    // the wrong parent (e.g. category=居家生活, subcategory=日常买菜 which really
+    // belongs to 餐饮美食). If the subcategory isn't under the chosen category,
+    // resolve it by name within this family; when it maps to exactly one
+    // subcategory we adopt it AND correct the parent category — self-healing the
+    // misclassification instead of silently dropping the subcategory.
     let subcategory_id = if let Some(sub_name) = subcategory_name {
-        let sub = sqlx::query_as::<_, Subcategory>(
+        let exact = sqlx::query_as::<_, Subcategory>(
             "SELECT * FROM subcategories WHERE name = $1 AND category_id = $2 LIMIT 1",
         )
         .bind(sub_name)
@@ -1030,7 +1162,54 @@ async fn execute_create_transaction(
         .fetch_optional(pool)
         .await
         .map_err(|e| format!("查询子分类失败: {}", e))?;
-        sub.map(|s| s.id)
+
+        if let Some(s) = exact {
+            Some(s.id)
+        } else {
+            // Look the subcategory up across the family's categories of the same
+            // transaction type. Only auto-correct when it's unambiguous (a single
+            // match) — names like 其他 exist under multiple parents.
+            let candidates = sqlx::query_as::<_, Subcategory>(
+                "SELECT s.* FROM subcategories s
+                 JOIN categories c ON s.category_id = c.id
+                 WHERE s.name = $1
+                   AND (c.user_id IS NULL OR c.family_id = $2)
+                   AND c.type = $3",
+            )
+            .bind(sub_name)
+            .bind(family_id)
+            .bind(&txn_type)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("查询子分类失败: {}", e))?;
+
+            if candidates.len() == 1 {
+                let s = &candidates[0];
+                if s.category_id != category.id {
+                    if let Some(real_parent) = sqlx::query_as::<_, Category>(
+                        "SELECT * FROM categories WHERE id = $1 LIMIT 1",
+                    )
+                    .bind(s.category_id)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| format!("查询分类失败: {}", e))?
+                    {
+                        tracing::info!(
+                            chosen = %category.name,
+                            corrected = %real_parent.name,
+                            subcategory = %sub_name,
+                            "AI create_transaction: corrected parent category from subcategory",
+                        );
+                        category = real_parent;
+                    }
+                }
+                Some(s.id)
+            } else {
+                // Ambiguous or unknown subcategory → keep the chosen category and
+                // record without a subcategory.
+                None
+            }
+        }
     } else {
         None
     };
@@ -1067,10 +1246,10 @@ async fn execute_create_transaction(
         .map_err(|e| format!("创建交易失败: {}", e))?;
 
     let type_label = if txn_type == "income" { "收入" } else { "支出" };
-    let sub_label = if let Some(sub_name) = subcategory_name {
-        format!(" > {}", sub_name)
-    } else {
-        String::new()
+    // Only show the subcategory if it was actually resolved & saved.
+    let sub_label = match (subcategory_id, subcategory_name) {
+        (Some(_), Some(sub_name)) => format!(" > {}", sub_name),
+        _ => String::new(),
     };
     let member_label = if let Some(m) = args["members"].as_array() {
         if !m.is_empty() {
@@ -1089,7 +1268,7 @@ async fn execute_create_transaction(
         type_label = type_label,
         amount = amount,
         currency = currency,
-        category = category_name,
+        category = category.name,
         sub = sub_label,
         date = date.format("%Y-%m-%d"),
         time = time.format("%H:%M"),

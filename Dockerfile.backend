@@ -1,7 +1,8 @@
 # =============================================================================
 # Stage 1 — cache dependencies
 # =============================================================================
-FROM docker.m.daocloud.io/library/rust:1-slim-bookworm AS deps
+# FROM docker.m.daocloud.io/library/rust:1-slim-bookworm AS deps
+FROM rust:1-slim-bookworm AS deps
 
 WORKDIR /app
 
@@ -31,7 +32,8 @@ RUN touch src/main.rs && cargo build --release --locked
 # =============================================================================
 # Stage 3 — minimal runtime
 # =============================================================================
-FROM docker.m.daocloud.io/library/debian:bookworm-slim AS runtime
+# FROM docker.m.daocloud.io/library/debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim AS runtime
 
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update \

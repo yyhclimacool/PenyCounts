@@ -146,6 +146,12 @@ pub struct ChatMessage {
     pub family_id: Uuid,
     pub role: String,
     pub content: String,
+    /// Serialized OpenAI `tool_calls` array for assistant turns that invoked tools.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<String>,
+    /// Set on `role = 'tool'` rows, linking the result back to its tool call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
