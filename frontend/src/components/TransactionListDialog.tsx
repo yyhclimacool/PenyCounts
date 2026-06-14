@@ -22,6 +22,9 @@ interface TransactionListDialogProps {
   endDate?: string;
   categoryId?: string;
   type?: 'income' | 'expense';
+  memberName?: string;
+  /** Client-side filter: keep only transactions whose category name includes this. */
+  categoryNameContains?: string;
 }
 
 export function TransactionListDialog({
@@ -32,6 +35,8 @@ export function TransactionListDialog({
   endDate,
   categoryId,
   type,
+  memberName,
+  categoryNameContains,
 }: TransactionListDialogProps) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -47,6 +52,7 @@ export function TransactionListDialog({
         ...(endDate && { end_date: endDate }),
         ...(categoryId && { category_id: categoryId }),
         ...(type && { type }),
+        ...(memberName && { member_name: memberName }),
         per_page: 100,
       }),
       categoriesService.getAll(),
@@ -61,19 +67,29 @@ export function TransactionListDialog({
         setTotal(0);
       })
       .finally(() => setLoading(false));
-  }, [open, startDate, endDate, categoryId, type]);
+  }, [open, startDate, endDate, categoryId, type, memberName]);
 
   const enrichedTransactions = useMemo(() => {
     const catMap = new Map(categories.map((c) => [c.id, c]));
     const subMap = new Map(
       categories.flatMap((c) => (c.subcategories ?? []).map((s) => [s.id, s])),
     );
-    return transactions.map((tx) => ({
-      ...tx,
-      category: catMap.get(tx.category_id),
-      subcategory: tx.subcategory_id ? subMap.get(tx.subcategory_id) : undefined,
-    }));
-  }, [transactions, categories]);
+    return transactions
+      .map((tx) => ({
+        ...tx,
+        category: catMap.get(tx.category_id),
+        subcategory: tx.subcategory_id ? subMap.get(tx.subcategory_id) : undefined,
+      }))
+      .filter((tx) =>
+        categoryNameContains
+          ? (tx.category?.name ?? '').includes(categoryNameContains)
+          : true,
+      );
+  }, [transactions, categories, categoryNameContains]);
+
+  // When filtering client-side, the backend `total` no longer reflects what's
+  // shown — use the filtered length instead.
+  const displayCount = categoryNameContains ? enrichedTransactions.length : total;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -82,7 +98,7 @@ export function TransactionListDialog({
           <DialogTitle>{title}</DialogTitle>
           {!loading && (
             <DialogDescription>
-              共 {total} 笔交易
+              共 {displayCount} 笔交易
             </DialogDescription>
           )}
         </DialogHeader>
@@ -140,7 +156,7 @@ export function TransactionListDialog({
                   </span>
                 </div>
               ))}
-              {total > 100 && (
+              {!categoryNameContains && total > 100 && (
                 <p className="text-xs text-center text-muted-foreground py-2">
                   仅显示前 100 条，共 {total} 条
                 </p>

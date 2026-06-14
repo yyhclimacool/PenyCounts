@@ -1208,6 +1208,7 @@ function SocialGiftsTab({ year }: { year: number }) {
   const [viewType, setViewType] = useState<'expense' | 'income'>('expense');
   const [data, setData] = useState<SocialSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [clickedPerson, setClickedPerson] = useState<string | null>(null);
   const transactionsRev = useDataStore((s) => s.transactionsRev);
   const socialGiftsRev = useDataStore((s) => s.socialGiftsRev);
 
@@ -1235,100 +1236,80 @@ function SocialGiftsTab({ year }: { year: number }) {
   );
   const netBalance = totalReceived - totalGiven;
 
-  const chartData = data.map((d) => ({
-    name: d.person_name,
-    given: showGiven ? (parseFloat(d.given) || 0) : 0,
-    received: showReceived ? (parseFloat(d.received) || 0) : 0,
-  }));
+  const chartData = data
+    .map((d) => ({
+      name: d.person_name,
+      given: parseFloat(d.given) || 0,
+      received: parseFloat(d.received) || 0,
+    }))
+    .filter((d) => (showGiven ? d.given > 0 : d.received > 0))
+    .sort((a, b) =>
+      showGiven ? a.given - b.given : a.received - b.received,
+    );
 
   const socialBarOption = useMemo((): echarts.EChartsCoreOption => {
-    const series: any[] = [];
-    const legendData: string[] = [];
-    if (showGiven) {
-      legendData.push('送出');
-      series.push({
-        name: '送出',
-        type: 'bar',
-        data: chartData.map((d) => d.given),
-        itemStyle: { color: EXPENSE_COLOR, borderRadius: [4, 4, 0, 0] },
-      });
-    }
-    if (showReceived) {
-      legendData.push('收到');
-      series.push({
-        name: '收到',
-        type: 'bar',
-        data: chartData.map((d) => d.received),
-        itemStyle: { color: INCOME_COLOR, borderRadius: [4, 4, 0, 0] },
-      });
-    }
-    if (showGiven && showReceived) {
-      legendData.push('净额');
-      series.push({
-        name: '净额',
-        type: 'line',
-        yAxisIndex: 1,
-        data: chartData.map((d) => d.received - d.given),
-        smooth: true,
-        symbol: 'circle',
-        symbolSize: 6,
-        lineStyle: { width: 2 },
-        itemStyle: { color: '#0062FF' },
-      });
-    }
+    const color = showGiven ? EXPENSE_COLOR : INCOME_COLOR;
+    const label = showGiven ? '送出' : '收到';
+    const hex = color.replace('#', '');
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    // Soft vertical gradient: solid at the top, fading toward the baseline.
+    const barFill = new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+      { offset: 0, color: `rgba(${r}, ${g}, ${b}, 0.95)` },
+      { offset: 1, color: `rgba(${r}, ${g}, ${b}, 0.35)` },
+    ]);
     return {
       tooltip: {
         trigger: 'axis',
-        axisPointer: { type: 'cross', crossStyle: { color: '#999' } },
+        axisPointer: { type: 'none' },
         ...TOOLTIP_STYLE,
-        formatter: tooltipFormatter,
-      },
-      toolbox: {
-        right: 8,
-        top: 4,
-        itemGap: 10,
-        feature: {
-          dataView: { show: true, readOnly: false },
-          magicType: { show: true, type: ['line', 'bar'] },
-          restore: { show: true },
-          saveAsImage: { show: true },
+        formatter: (params: any) => {
+          const items = Array.isArray(params) ? params : [params];
+          const p = items[0];
+          const raw = p?.value;
+          const v = Array.isArray(raw) ? raw[1] : raw;
+          return `<div style="font-weight:500;margin-bottom:4px">${p?.axisValue}</div><div style="display:flex;align-items:center;gap:6px;line-height:1.8"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color}"></span><span style="color:#6b7280">${label}:</span><span style="font-weight:500">${formatCurrency(v ?? 0, 'CNY')}</span></div>`;
         },
       },
-      legend: { data: legendData, bottom: 0, textStyle: { fontSize: 12 } },
-      grid: { left: 60, right: 60, top: 56, bottom: 36 },
+      grid: { left: 52, right: 16, top: 16, bottom: chartData.length > 6 ? 56 : 28 },
       xAxis: {
         type: 'category',
         data: chartData.map((d) => d.name),
-        axisPointer: { type: 'shadow' },
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: {
-          fontSize: 12,
+          fontSize: 11,
+          color: '#9ca3af',
           interval: 0,
           rotate: chartData.length > 6 ? 35 : 0,
         },
       },
-      yAxis: [
+      yAxis: {
+        type: 'value',
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 11, color: '#9ca3af', formatter: formatYAxis },
+        splitLine: { lineStyle: { type: 'dashed', opacity: 0.18 } },
+      },
+      // Staggered "elastic" entrance: each bar drops in slightly after the previous one.
+      animationEasing: 'elasticOut',
+      animationDurationUpdate: 500,
+      animationDelayUpdate: (idx: number) => idx * 5,
+      series: [
         {
-          type: 'value',
-          name: '金额',
-          axisLine: { show: false },
-          axisTick: { show: false },
-          axisLabel: { fontSize: 11, formatter: formatYAxis },
-          splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
-        },
-        {
-          type: 'value',
-          name: '净额',
-          axisLine: { show: false },
-          axisTick: { show: false },
-          axisLabel: { fontSize: 11, formatter: formatYAxis },
-          splitLine: { show: false },
+          type: 'bar',
+          name: label,
+          data: chartData.map((d) => (showGiven ? d.given : d.received)),
+          barMaxWidth: 18,
+          barCategoryGap: '45%',
+          itemStyle: { color: barFill, borderRadius: [99, 99, 99, 99] },
+          emphasis: { focus: 'series', itemStyle: { color } },
+          animationDelay: (idx: number) => idx * 30,
         },
       ],
-      series,
     };
-  }, [chartData, showGiven, showReceived]);
+  }, [chartData, showGiven]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -1381,6 +1362,13 @@ function SocialGiftsTab({ year }: { year: number }) {
                 option={socialBarOption}
                 style={{ height: 350 }}
                 notMerge
+                onEvents={{
+                  click: (params: any) => {
+                    if (params.componentType !== 'series') return;
+                    const name = params.name as string;
+                    if (name) setClickedPerson(name);
+                  },
+                }}
               />
             </CardContent>
           </Card>
@@ -1438,6 +1426,19 @@ function SocialGiftsTab({ year }: { year: number }) {
               </div>
             </CardContent>
           </Card>
+
+          {clickedPerson && (
+            <TransactionListDialog
+              open={!!clickedPerson}
+              onOpenChange={(open) => { if (!open) setClickedPerson(null); }}
+              title={`${clickedPerson} · ${showGiven ? '送出' : '收到'}`}
+              type={viewType}
+              startDate={`${year}-01-01`}
+              endDate={`${year}-12-31`}
+              memberName={clickedPerson}
+              categoryNameContains="人情"
+            />
+          )}
         </>
       )}
     </div>
