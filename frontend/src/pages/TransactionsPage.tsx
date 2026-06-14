@@ -17,6 +17,8 @@ import {
   Loader2,
   Upload,
   Download,
+  Camera,
+  Sparkles,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -44,6 +46,7 @@ import {
 import * as transactionsService from '@/services/transactions';
 import * as categoriesService from '@/services/categories';
 import * as membersService from '@/services/members';
+import * as ocrService from '@/services/ocr';
 import { useDataStore } from '@/stores/dataStore';
 import type { Transaction, Category, Member } from '@/types';
 import { formatCurrency } from '@/utils/format';
@@ -113,6 +116,9 @@ export default function TransactionsPage() {
   const [memberTags, setMemberTags] = useState<string[]>([]);
   const [memberInput, setMemberInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrAvailable, setOcrAvailable] = useState<boolean | null>(null);
+  const ocrInputRef = useRef<HTMLInputElement>(null);
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -170,6 +176,16 @@ export default function TransactionsPage() {
       setSearchParams(next, { replace: true });
     }
   }, [searchParams, setSearchParams]);
+
+  // Probe vision-model availability lazily, the first time the add dialog opens.
+  useEffect(() => {
+    if (dialogOpen && !editingTx && ocrAvailable === null) {
+      ocrService
+        .getOcrAvailability()
+        .then((a) => setOcrAvailable(a.available))
+        .catch(() => setOcrAvailable(false));
+    }
+  }, [dialogOpen, editingTx, ocrAvailable]);
 
   const enrichedTransactions = useMemo(() => {
     const catMap = new Map(categories.map((c) => [c.id, c]));
@@ -405,6 +421,50 @@ export default function TransactionsPage() {
       }
       return next;
     });
+  }
+
+  async function handleOcrFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setOcrLoading(true);
+    try {
+      const r = await ocrService.extractFromImage(file);
+      setForm((prev) => {
+        const next = { ...prev };
+        if (r.type === 'income' || r.type === 'expense') next.type = r.type;
+        if (r.amount) next.amount = r.amount;
+        if (r.date) next.date = r.date;
+        const noteParts = [r.merchant, r.note].filter(Boolean);
+        if (noteParts.length) next.note = noteParts.join(' · ');
+
+        // Match category/subcategory by name within the resolved type.
+        const targetType = next.type;
+        const cat = r.category_name
+          ? categories.find(
+              (c) => c.type === targetType && c.name === r.category_name,
+            )
+          : undefined;
+        if (cat) {
+          next.category_id = cat.id;
+          const sub = r.subcategory_name
+            ? (cat.subcategories ?? []).find((s) => s.name === r.subcategory_name)
+            : undefined;
+          next.subcategory_id = sub ? sub.id : '';
+        }
+        return next;
+      });
+      addToast({ title: '识别完成，请核对信息', variant: 'success' });
+    } catch (err) {
+      const msg =
+        err && typeof err === 'object' && 'response' in err
+          ? ((err as { response?: { data?: { error?: string } } }).response?.data
+              ?.error ?? '识别失败')
+          : '识别失败';
+      addToast({ title: msg, variant: 'destructive' });
+    } finally {
+      setOcrLoading(false);
+    }
   }
 
   return (
@@ -847,6 +907,47 @@ export default function TransactionsPage() {
               {editingTx ? '修改交易信息' : '记录一笔新的收入或支出'}
             </DialogDescription>
           </DialogHeader>
+
+          {!editingTx && ocrAvailable !== false && (
+            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+              <input
+                ref={ocrInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={handleOcrFile}
+              />
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-sm">
+                  <Sparkles className="size-4 text-primary" />
+                  <span className="font-medium">拍照 / 截图记账</span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => ocrInputRef.current?.click()}
+                  disabled={ocrLoading}
+                  className="gap-1.5"
+                >
+                  {ocrLoading ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      识别中…
+                    </>
+                  ) : (
+                    <>
+                      <Camera className="size-4" />
+                      选择图片
+                    </>
+                  )}
+                </Button>
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                上传支付截图或小票，AI 自动填写金额、分类等信息
+              </p>
+            </div>
+          )}
 
           <div className="flex flex-col gap-4 py-2">
             {/* Type Toggle */}

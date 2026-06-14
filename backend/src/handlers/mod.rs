@@ -1,7 +1,10 @@
 pub mod ai;
 pub mod auth;
+pub mod budget;
 pub mod categories;
 pub mod family;
+pub mod insights;
+pub mod streak;
 pub mod members;
 pub mod settings;
 pub mod social_gifts;
@@ -158,6 +161,32 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
             "/api/stats/yearly-trend",
             axum::routing::get(stats::yearly_trend),
         )
+        // Insights (home dashboard)
+        .route("/api/insights", axum::routing::get(insights::get_insights))
+        .route("/api/streak", axum::routing::get(streak::get_streak))
+        .route("/api/ai/ocr", axum::routing::post(ai::ocr))
+        .route(
+            "/api/ai/ocr/availability",
+            axum::routing::get(ai::ocr_availability),
+        )
+        // Budgets
+        .route(
+            "/api/budgets",
+            axum::routing::get(budget::list_budgets).post(budget::create_budget),
+        )
+        .route(
+            "/api/budgets/{id}",
+            axum::routing::put(budget::update_budget).delete(budget::delete_budget),
+        )
+        // Savings goals
+        .route(
+            "/api/goals",
+            axum::routing::get(budget::list_goals).post(budget::create_goal),
+        )
+        .route(
+            "/api/goals/{id}",
+            axum::routing::put(budget::update_goal).delete(budget::delete_goal),
+        )
         // AI (non-streaming)
         .route(
             "/api/ai/config",
@@ -219,9 +248,10 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
         .route("/api/health", axum::routing::get(health))
         .layer(CompressionLayer::new().br(true).gzip(true));
 
-    // SSE route — no compression (buffering breaks streaming)
+    // SSE routes — no compression (buffering breaks streaming)
     let sse_routes = Router::new()
-        .route("/api/ai/chat", axum::routing::post(ai::chat));
+        .route("/api/ai/chat", axum::routing::post(ai::chat))
+        .route("/api/ai/report", axum::routing::post(ai::report));
 
     Router::new()
         .merge(api_routes)

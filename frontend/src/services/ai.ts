@@ -29,13 +29,129 @@ export async function clearChatHistory(): Promise<void> {
   await api.delete('/ai/chat/history');
 }
 
-function resolveChatRequestUrl(): string {
+function resolveStreamUrl(suffix: string): string {
   const base = import.meta.env.VITE_API_URL ?? '/api';
-  const suffix = '/ai/chat';
-  if (/^https?:\/\//i.test(base)) {
-    return `${base.replace(/\/$/, '')}${suffix}`;
-  }
   return `${base.replace(/\/$/, '')}${suffix}`;
+}
+
+function resolveChatRequestUrl(): string {
+  return resolveStreamUrl('/ai/chat');
+}
+
+export interface ReportParams {
+  period: 'monthly' | 'yearly';
+  year: number;
+  month?: number;
+}
+
+export interface ReportStreamOptions {
+  onDelta?: (chunk: string) => void;
+  onDone?: () => void;
+  onError?: (error: Error) => void;
+}
+
+/**
+ * Streams an AI-generated financial report (POST + SSE). Plain `data:` lines
+ * carry Markdown tokens; `event: error` carries an error; `event: done` ends.
+ */
+export async function streamReport(
+  params: ReportParams,
+  options: ReportStreamOptions = {},
+  signal?: AbortSignal,
+): Promise<void> {
+  const { onDelta, onDone, onError } = options;
+  const url = resolveStreamUrl('/ai/report');
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(params),
+      signal,
+    });
+  } catch (e) {
+    onError?.(e instanceof Error ? e : new Error(String(e)));
+    onDone?.();
+    return;
+  }
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    onError?.(new Error(text || `请求失败 (${res.status})`));
+    onDone?.();
+    return;
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    onError?.(new Error('响应体不可读'));
+    onDone?.();
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let carry = '';
+  let currentEvent = 'message';
+  let dataLines: string[] = [];
+
+  const dispatchEvent = () => {
+    const evt = currentEvent;
+    const payload = dataLines.join('\n');
+    currentEvent = 'message';
+    dataLines = [];
+    if (dataLines.length === 0 && payload === '') return;
+    if (payload === '[DONE]') return;
+    if (evt === 'error') {
+      onError?.(new Error(payload));
+      return;
+    }
+    if (evt === 'done') return;
+    if (payload) onDelta?.(payload);
+  };
+
+  const handleLine = (raw: string) => {
+    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+    if (line === '') {
+      dispatchEvent();
+      return;
+    }
+    if (line.startsWith(':')) return;
+    if (line.startsWith('event:')) {
+      let name = line.slice(6);
+      if (name.startsWith(' ')) name = name.slice(1);
+      currentEvent = name;
+      return;
+    }
+    if (line.startsWith('data:')) {
+      let value = line.slice(5);
+      if (value.startsWith(' ')) value = value.slice(1);
+      dataLines.push(value);
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      carry += decoder.decode(value, { stream: true });
+      const parts = carry.split('\n');
+      carry = parts.pop() ?? '';
+      for (const raw of parts) handleLine(raw);
+    }
+    if (carry) handleLine(carry);
+    dispatchEvent();
+  } catch (e) {
+    if (e instanceof Error && e.name === 'AbortError') return;
+    onError?.(e instanceof Error ? e : new Error(String(e)));
+  } finally {
+    onDone?.();
+  }
 }
 
 export interface ChatStreamOptions {

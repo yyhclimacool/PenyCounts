@@ -51,6 +51,10 @@ import type {
 import { formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import { usePersistentState } from '@/hooks/usePersistentState';
+import { useCountUp } from '@/hooks/useCountUp';
+import { EmptyState as EmptyStateBase } from '@/components/ui/empty-state';
+import { InsightsHeader } from '@/components/insights/InsightsHeader';
+import { StreakCard } from '@/components/streak/StreakCard';
 import { TransactionListDialog } from '@/components/TransactionListDialog';
 
 
@@ -167,10 +171,32 @@ function Spinner() {
 
 function EmptyState({ message = '暂无数据' }: { message?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-      <BarChart3 className="size-12 mb-3 opacity-30" />
-      <p className="text-sm">{message}</p>
-    </div>
+    <EmptyStateBase
+      icon={BarChart3}
+      title={message}
+      description="记录交易后，这里会显示统计图表"
+      className="py-16"
+    />
+  );
+}
+
+/** Currency value that animates from its previous amount when it changes. */
+function CountUpCurrency({
+  value,
+  currency = 'CNY',
+  signed = false,
+}: {
+  value: number;
+  currency?: string;
+  signed?: boolean;
+}) {
+  const animated = useCountUp(value);
+  const prefix = signed && value >= 0 ? '+' : '';
+  return (
+    <>
+      {prefix}
+      {formatCurrency(animated, currency)}
+    </>
   );
 }
 
@@ -597,7 +623,7 @@ function OverviewTab({ year }: { year: number }) {
               <span className="text-xs text-muted-foreground">年度收入</span>
             </div>
             <p className="text-2xl font-bold text-income tracking-tight tabular-nums">
-              {formatCurrency(yearIncome, 'CNY')}
+              <CountUpCurrency value={yearIncome} />
             </p>
           </CardContent>
         </Card>
@@ -611,7 +637,7 @@ function OverviewTab({ year }: { year: number }) {
               <span className="text-xs text-muted-foreground">年度支出</span>
             </div>
             <p className="text-2xl font-bold text-expense tracking-tight tabular-nums">
-              {formatCurrency(yearExpense, 'CNY')}
+              <CountUpCurrency value={yearExpense} />
             </p>
           </CardContent>
         </Card>
@@ -628,7 +654,7 @@ function OverviewTab({ year }: { year: number }) {
               'text-2xl font-bold tracking-tight tabular-nums',
               yearNet >= 0 ? 'text-primary' : 'text-expense',
             )}>
-              {yearNet >= 0 ? '+' : ''}{formatCurrency(yearNet, 'CNY')}
+              <CountUpCurrency value={yearNet} signed />
             </p>
           </CardContent>
         </Card>
@@ -1525,7 +1551,11 @@ export default function StatisticsPage() {
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 max-w-5xl mx-auto">
-      <div className="flex items-center justify-between gap-3">
+      <InsightsHeader />
+
+      <StreakCard />
+
+      <div className="flex items-center justify-between gap-3 border-t pt-5">
         <h1 className="text-2xl font-bold tracking-tight">统计分析</h1>
         <YearSelector year={year} onChange={setYear} />
       </div>

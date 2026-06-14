@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::errors::AppError;
 use crate::models::{
     Category, ChatMessage, CreateSocialGiftRequest, CreateTransactionRequest, LlmConfig,
-    LlmConfigRequest, Member, SocialGiftFilter, Subcategory,
+    LlmConfigRequest, Member, OcrAvailability, OcrResult, SocialGiftFilter, Subcategory,
 };
 use crate::services::{social_gift, stats, transaction};
 
@@ -1784,4 +1784,442 @@ async fn execute_query_social_gifts(
     );
 
     Ok(summary)
+}
+
+// ── AI financial report (single-shot streaming, no tools) ────────────
+
+/// Assemble a compact, factual data block the model narrates into a report.
+async fn build_report_context(
+    pool: &PgPool,
+    family_id: Uuid,
+    monthly: bool,
+    year: i32,
+    month: Option<u32>,
+) -> Result<String, AppError> {
+    let mut out = String::new();
+
+    if monthly {
+        let m = month.unwrap_or(1);
+        let exp_cats =
+            stats::category_breakdown(pool, family_id, year, Some(m), Some("expense")).await?;
+        let inc_cats =
+            stats::category_breakdown(pool, family_id, year, Some(m), Some("income")).await?;
+        let members = stats::member_breakdown(pool, family_id, year, Some(m), None).await?;
+        let daily = stats::daily_trend(pool, family_id, year, m).await?;
+
+        let total_exp: Decimal = exp_cats.iter().map(|c| c.total).sum();
+        let total_inc: Decimal = inc_cats.iter().map(|c| c.total).sum();
+        let active_days = daily
+            .iter()
+            .filter(|d| !d.income.is_zero() || !d.expense.is_zero())
+            .count();
+
+        out.push_str(&format!(
+            "时间范围: {year}年{m}月\n总收入: {total_inc} 元\n总支出: {total_exp} 元\n结余: {} 元\n有记账的天数: {active_days} 天\n\n",
+            total_inc - total_exp
+        ));
+
+        out.push_str("支出分类 TOP（金额/占比）:\n");
+        if exp_cats.is_empty() {
+            out.push_str("（无支出）\n");
+        } else {
+            for c in exp_cats.iter().take(10) {
+                out.push_str(&format!(
+                    "- {} {}: {} 元 ({:.1}%)\n",
+                    c.icon, c.category_name, c.total, c.percentage
+                ));
+            }
+        }
+        out.push('\n');
+
+        out.push_str("收入来源:\n");
+        if inc_cats.is_empty() {
+            out.push_str("（无收入）\n");
+        } else {
+            for c in inc_cats.iter().take(8) {
+                out.push_str(&format!("- {} {}: {} 元\n", c.icon, c.category_name, c.total));
+            }
+        }
+        out.push('\n');
+
+        out.push_str("成员分摊:\n");
+        if members.is_empty() {
+            out.push_str("（无成员数据）\n");
+        } else {
+            for mb in members.iter().take(10) {
+                out.push_str(&format!("- {}: {} 元\n", mb.member_name, mb.total));
+            }
+        }
+    } else {
+        let trend = stats::monthly_trend(pool, family_id, year).await?;
+        let exp_cats =
+            stats::category_breakdown(pool, family_id, year, None, Some("expense")).await?;
+        let inc_cats =
+            stats::category_breakdown(pool, family_id, year, None, Some("income")).await?;
+        let members = stats::member_breakdown(pool, family_id, year, None, None).await?;
+        let social = stats::social_summary(pool, family_id, year).await?;
+
+        let total_exp: Decimal = exp_cats.iter().map(|c| c.total).sum();
+        let total_inc: Decimal = inc_cats.iter().map(|c| c.total).sum();
+
+        out.push_str(&format!(
+            "时间范围: {year}年度\n全年收入: {total_inc} 元\n全年支出: {total_exp} 元\n结余: {} 元\n\n",
+            total_inc - total_exp
+        ));
+
+        out.push_str("逐月收支:\n");
+        if trend.is_empty() {
+            out.push_str("（无数据）\n");
+        } else {
+            for t in &trend {
+                out.push_str(&format!(
+                    "- {}月: 收入 {} / 支出 {}\n",
+                    t.month, t.income, t.expense
+                ));
+            }
+        }
+        out.push('\n');
+
+        out.push_str("支出分类 TOP（金额/占比）:\n");
+        if exp_cats.is_empty() {
+            out.push_str("（无支出）\n");
+        } else {
+            for c in exp_cats.iter().take(12) {
+                out.push_str(&format!(
+                    "- {} {}: {} 元 ({:.1}%)\n",
+                    c.icon, c.category_name, c.total, c.percentage
+                ));
+            }
+        }
+        out.push('\n');
+
+        out.push_str("成员分摊:\n");
+        if members.is_empty() {
+            out.push_str("（无成员数据）\n");
+        } else {
+            for mb in members.iter().take(10) {
+                out.push_str(&format!("- {}: {} 元\n", mb.member_name, mb.total));
+            }
+        }
+        out.push('\n');
+
+        if !social.is_empty() {
+            out.push_str("人情往来:\n");
+            for s in social.iter().take(10) {
+                out.push_str(&format!(
+                    "- {}: 送出 {} / 收到 {} / 净 {}\n",
+                    s.person_name, s.given, s.received, s.net
+                ));
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+pub async fn report_stream(
+    pool: &PgPool,
+    family_id: Uuid,
+    period: String,
+    year: i32,
+    month: Option<u32>,
+) -> Result<impl futures::Stream<Item = Result<Event, Infallible>>, AppError> {
+    let llm_config = sqlx::query_as::<_, LlmConfig>(
+        "SELECT * FROM llm_configs WHERE family_id = $1 AND is_active = true LIMIT 1",
+    )
+    .bind(family_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| {
+        AppError::BadRequest("No active LLM configuration. Please configure one first.".to_string())
+    })?;
+
+    let monthly = period != "yearly";
+    let context = build_report_context(pool, family_id, monthly, year, month).await?;
+
+    let period_label = if monthly {
+        format!("{}年{}月", year, month.unwrap_or(1))
+    } else {
+        format!("{}年度", year)
+    };
+
+    let system_prompt = format!(
+        "你是 PenyCounts 的资深家庭财务分析师。请基于用户提供的真实账目数据，输出一份「{period_label}」财务报告。\n\n\
+         要求：\n\
+         - 用规范 Markdown，分小节：## 总览、## 收支结构、## 重点发现、## 行动建议\n\
+         - 语气温暖、像朋友聊天，而不是冷冰冰的报表\n\
+         - 多用具体数字与百分比支撑结论，金额用人民币（¥）\n\
+         - 既指出做得好的地方，也点出需要注意的地方，给出 2-4 条可执行建议\n\
+         - 绝不编造数据中不存在的信息；若某些数据为空，如实说明\n\
+         - 直接输出报告正文，不要寒暄开场白"
+    );
+
+    let user_content = format!("以下是「{period_label}」的账目数据：\n\n{context}");
+
+    let api_key = llm_config.api_key.unwrap_or_default();
+    let api_url = llm_config.api_url.clone();
+    let model_name = llm_config.model_name.clone();
+
+    let messages = serde_json::json!([
+        { "role": "system", "content": system_prompt },
+        { "role": "user", "content": user_content },
+    ]);
+
+    let stream = async_stream::stream! {
+        let client = reqwest::Client::new();
+        let request_body = serde_json::json!({
+            "model": model_name,
+            "messages": messages,
+            "stream": true,
+        });
+
+        let response = match client
+            .post(&api_url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                yield Ok(Event::default().event("error").data(format!("LLM 请求失败: {}", e)));
+                return;
+            }
+        };
+
+        if !response.status().is_success() {
+            let body = response.text().await.unwrap_or_default();
+            yield Ok(Event::default().event("error").data(format!("LLM API 错误: {}", body)));
+            return;
+        }
+
+        let mut byte_stream = response.bytes_stream();
+        let mut buffer = String::new();
+        let mut thinking_phase = false;
+
+        while let Some(chunk) = byte_stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    buffer.push_str(&String::from_utf8_lossy(&bytes));
+                    while let Some(pos) = buffer.find('\n') {
+                        let line = buffer[..pos].trim().to_string();
+                        buffer = buffer[pos + 1..].to_string();
+                        if line.is_empty() { continue; }
+                        if line == "data: [DONE]" { break; }
+                        if let Some(data) = line.strip_prefix("data: ") {
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                                let delta = &parsed["choices"][0]["delta"];
+                                let reasoning = delta["reasoning_content"].as_str().unwrap_or("");
+                                let content_text = delta["content"].as_str().unwrap_or("");
+                                if !reasoning.is_empty() { thinking_phase = true; }
+                                if thinking_phase && reasoning.is_empty() && !content_text.is_empty() {
+                                    thinking_phase = false;
+                                }
+                                if !content_text.is_empty() && !thinking_phase {
+                                    yield Ok(Event::default().data(content_text));
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    yield Ok(Event::default().event("error").data(e.to_string()));
+                    break;
+                }
+            }
+        }
+
+        yield Ok(Event::default().event("done").data("[DONE]"));
+    };
+
+    Ok(stream)
+}
+
+// ── OCR (photo bookkeeping) ──────────────────────────────────────────
+
+/// Heuristic check for whether a model name is likely vision-capable. There's no
+/// universal capability endpoint across OpenAI-compatible providers, so we match
+/// on well-known multimodal model families.
+pub fn model_supports_vision(model_name: &str) -> bool {
+    let m = model_name.to_lowercase();
+    const HINTS: &[&str] = &[
+        "vl", "vision", "gpt-4o", "4o", "gpt-4.1", "gpt-5", "o4",
+        "claude-3", "claude-4", "claude-sonnet", "claude-opus", "claude-haiku",
+        "gemini", "qwen-vl", "qwen2-vl", "qwen2.5-vl", "internvl", "llava",
+        "pixtral", "glm-4v", "glm-4.1v", "step-1v", "yi-vision", "minicpm-v",
+        "grok-vision", "grok-2-vision", "doubao-vision", "ernie-vl",
+    ];
+    HINTS.iter().any(|h| m.contains(h))
+}
+
+pub async fn ocr_availability(
+    pool: &PgPool,
+    family_id: Uuid,
+) -> Result<OcrAvailability, AppError> {
+    let config = sqlx::query_as::<_, LlmConfig>(
+        "SELECT * FROM llm_configs WHERE family_id = $1 AND is_active = true LIMIT 1",
+    )
+    .bind(family_id)
+    .fetch_optional(pool)
+    .await?;
+
+    match config {
+        Some(c) => Ok(OcrAvailability {
+            available: model_supports_vision(&c.model_name),
+            model_name: c.model_name,
+        }),
+        None => Ok(OcrAvailability {
+            available: false,
+            model_name: String::new(),
+        }),
+    }
+}
+
+/// Send an image to the configured vision LLM and extract structured
+/// transaction fields. `image_data_url` must be a full `data:<mime>;base64,...`.
+pub async fn ocr_extract(
+    pool: &PgPool,
+    family_id: Uuid,
+    image_data_url: String,
+) -> Result<OcrResult, AppError> {
+    let llm_config = sqlx::query_as::<_, LlmConfig>(
+        "SELECT * FROM llm_configs WHERE family_id = $1 AND is_active = true LIMIT 1",
+    )
+    .bind(family_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| {
+        AppError::BadRequest("未配置 AI 模型，请先在设置中配置".to_string())
+    })?;
+
+    // Build the available category list so the model can classify accurately.
+    let categories = sqlx::query_as::<_, Category>(
+        "SELECT * FROM categories WHERE user_id IS NULL OR family_id = $1 ORDER BY type, sort_order",
+    )
+    .bind(family_id)
+    .fetch_all(pool)
+    .await?;
+    let subcategories = sqlx::query_as::<_, Subcategory>(
+        "SELECT s.* FROM subcategories s
+         JOIN categories c ON s.category_id = c.id
+         WHERE c.user_id IS NULL OR c.family_id = $1
+         ORDER BY s.sort_order",
+    )
+    .bind(family_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut category_list = String::new();
+    for cat in &categories {
+        category_list.push_str(&format!("- {} ({})\n", cat.name, cat.r#type));
+        for sub in subcategories.iter().filter(|s| s.category_id == cat.id) {
+            category_list.push_str(&format!("  - {}\n", sub.name));
+        }
+    }
+
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let instruction = format!(
+        "你是记账助手。请仔细识别这张图片（可能是支付截图、小票、账单或商品价签），\
+         提取其中的一笔交易信息，并只返回一个 JSON 对象，不要包含任何解释或 Markdown 代码块。\n\n\
+         可用分类（含子分类）:\n{category_list}\n\
+         今天是 {today}。\n\n\
+         JSON 字段（缺失则省略该字段）:\n\
+         - amount: 金额数字字符串，如 \"38.50\"\n\
+         - type: \"income\" 或 \"expense\"（付款/支出为 expense，收款/收入为 income）\n\
+         - date: \"YYYY-MM-DD\"，从图片中的时间推断，没有则用今天\n\
+         - category_name: 从上面分类中选最匹配的一级分类名\n\
+         - subcategory_name: 所选一级分类下的子分类名（可省略）\n\
+         - merchant: 商家或对方名称\n\
+         - note: 简短备注（如商品名）\n\n\
+         只输出 JSON。"
+    );
+
+    let request_body = serde_json::json!({
+        "model": llm_config.model_name,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": instruction },
+                    { "type": "image_url", "image_url": { "url": image_data_url } }
+                ]
+            }
+        ],
+        "max_tokens": 1024,
+        "stream": false,
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(90))
+        .build()
+        .map_err(|e| AppError::Internal(format!("创建请求客户端失败: {e}")))?;
+
+    let mut req = client
+        .post(&llm_config.api_url)
+        .header("Content-Type", "application/json");
+    if let Some(key) = llm_config.api_key.as_deref() {
+        if !key.is_empty() {
+            req = req.header("Authorization", format!("Bearer {key}"));
+        }
+    }
+
+    let response = req
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("调用视觉模型失败: {e}")))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(AppError::BadRequest(format!(
+            "视觉模型返回错误 ({}): {}",
+            status.as_u16(),
+            body
+        )));
+    }
+
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| AppError::Internal(format!("解析响应失败: {e}")))?;
+    let content = body["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if content.is_empty() {
+        return Err(AppError::BadRequest(
+            "模型未能识别图片内容，请换一张更清晰的图片".to_string(),
+        ));
+    }
+
+    let json_str = extract_json_block(&content);
+    let result: OcrResult = serde_json::from_str(&json_str).map_err(|_| {
+        AppError::BadRequest(format!("无法解析识别结果: {content}"))
+    })?;
+
+    Ok(result)
+}
+
+/// Pull the first JSON object out of a model reply, tolerating ```json fences
+/// and surrounding prose.
+fn extract_json_block(text: &str) -> String {
+    let trimmed = text.trim();
+    // Strip a fenced code block if present.
+    if let Some(rest) = trimmed.strip_prefix("```") {
+        let rest = rest.strip_prefix("json").unwrap_or(rest);
+        if let Some(end) = rest.rfind("```") {
+            return rest[..end].trim().to_string();
+        }
+    }
+    // Otherwise grab the substring between the first '{' and last '}'.
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        if end > start {
+            return trimmed[start..=end].to_string();
+        }
+    }
+    trimmed.to_string()
 }

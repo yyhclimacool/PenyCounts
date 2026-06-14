@@ -1,7 +1,10 @@
 pub mod ai;
 pub mod auth;
+pub mod budget;
 pub mod category;
 pub mod family;
+pub mod insights;
+pub mod streak;
 pub mod member;
 pub mod settings;
 pub mod social_gift;

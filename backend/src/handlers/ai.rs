@@ -1,16 +1,20 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Multipart, Path, State},
     http::StatusCode,
     response::sse::{KeepAlive, Sse},
     Json,
 };
+use base64::Engine;
 use std::time::Duration;
 use uuid::Uuid;
 
 use crate::config::AppState;
 use crate::errors::AppError;
 use crate::middleware::AuthUser;
-use crate::models::{ChatMessage, ChatRequest, LlmConfig, LlmConfigRequest};
+use crate::models::{
+    ChatMessage, ChatRequest, LlmConfig, LlmConfigRequest, OcrAvailability, OcrResult,
+    ReportRequest,
+};
 use crate::services;
 
 pub async fn list_configs(
@@ -114,6 +118,72 @@ pub async fn chat(
     // content. Send a periodic keep-alive comment so reverse proxies (nginx
     // proxy_read_timeout) don't drop the idle connection mid-thinking.
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))))
+}
+
+pub async fn report(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<ReportRequest>,
+) -> Result<Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>>, AppError>
+{
+    tracing::debug!(user_id = %auth.family_id, period = %req.period, year = req.year, month = ?req.month, "report: received request");
+    let stream = services::ai::report_stream(
+        &state.pool,
+        auth.family_id,
+        req.period,
+        req.year,
+        req.month,
+    )
+    .await?;
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))))
+}
+
+pub async fn ocr_availability(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<OcrAvailability>, AppError> {
+    let data = services::ai::ocr_availability(&state.pool, auth.family_id).await?;
+    Ok(Json(data))
+}
+
+pub async fn ocr(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    mut multipart: Multipart,
+) -> Result<Json<OcrResult>, AppError> {
+    let mut data_url: Option<String> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("读取上传内容失败: {e}")))?
+    {
+        if field.name() == Some("file") {
+            let content_type = field
+                .content_type()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "image/jpeg".to_string());
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::BadRequest(format!("读取图片失败: {e}")))?;
+            if bytes.is_empty() {
+                return Err(AppError::BadRequest("图片为空".to_string()));
+            }
+            // Guard against oversized uploads (~10 MB).
+            if bytes.len() > 10 * 1024 * 1024 {
+                return Err(AppError::BadRequest("图片过大，请压缩后重试".to_string()));
+            }
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            data_url = Some(format!("data:{content_type};base64,{encoded}"));
+        }
+    }
+
+    let data_url = data_url
+        .ok_or_else(|| AppError::BadRequest("缺少图片文件 (file)".to_string()))?;
+
+    let result = services::ai::ocr_extract(&state.pool, auth.family_id, data_url).await?;
+    Ok(Json(result))
 }
 
 pub async fn chat_history(

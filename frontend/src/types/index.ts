@@ -174,6 +174,122 @@ export interface PaginatedResponse<T> {
   per_page: number;
 }
 
+// ── Insights (home dashboard) ────────────────────────────────────────
+
+export interface InsightOverview {
+  year: number;
+  month: number;
+  month_income: string;
+  month_expense: string;
+  month_net: string;
+  last_month_expense: string;
+  expense_mom: number | null;
+  projected_expense: string;
+  days_elapsed: number;
+  days_in_month: number;
+  days_since_last_txn: number | null;
+  top_category: string | null;
+  top_category_icon: string | null;
+  top_category_amount: string;
+}
+
+export type InsightKind = 'info' | 'warning' | 'success' | 'tip';
+
+export interface InsightCard {
+  id: string;
+  kind: InsightKind;
+  icon: string;
+  title: string;
+  body: string;
+}
+
+export interface InsightsResponse {
+  overview: InsightOverview;
+  cards: InsightCard[];
+}
+
+// ── Budgets & savings goals ──────────────────────────────────────────
+
+// ── OCR (photo bookkeeping) ──────────────────────────────────────────
+export interface OcrAvailability {
+  available: boolean;
+  model_name: string;
+}
+
+export interface OcrResult {
+  amount?: string;
+  type?: 'income' | 'expense';
+  date?: string;
+  category_name?: string;
+  subcategory_name?: string;
+  merchant?: string;
+  note?: string;
+}
+
+// ── Streak / gamification ────────────────────────────────────────────
+export interface DayCount {
+  date: string;
+  count: number;
+}
+
+export interface Achievement {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  unlocked: boolean;
+  progress: number;
+}
+
+export interface StreakResponse {
+  current_streak: number;
+  longest_streak: number;
+  total_active_days: number;
+  total_transactions: number;
+  today_logged: boolean;
+  daily: DayCount[];
+  achievements: Achievement[];
+}
+
+export type BudgetPeriod = 'monthly' | 'yearly';
+
+export interface BudgetWithSpent {
+  id: string;
+  category_id: string | null;
+  category_name: string | null;
+  category_icon: string | null;
+  amount: string;
+  period: BudgetPeriod;
+  spent: string;
+  created_at: string;
+}
+
+export interface BudgetRequest {
+  category_id?: string | null;
+  amount: string;
+  period: BudgetPeriod;
+}
+
+export interface SavingsGoal {
+  id: string;
+  family_id: string;
+  user_id: string;
+  name: string;
+  target_amount: string;
+  current_amount: string;
+  deadline: string | null;
+  icon: string;
+  created_at: string;
+}
+
+export interface SavingsGoalRequest {
+  name: string;
+  target_amount: string;
+  current_amount: string;
+  deadline?: string | null;
+  icon?: string;
+}
+
 // ── Settings import/export (JSON) ────────────────────────────────────
 // A versioned envelope aggregating the user's configurable data. Every
 // section is optional so the format stays backward/forward compatible —

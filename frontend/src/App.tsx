@@ -12,6 +12,8 @@ const TransactionsPage = lazy(() => import('@/pages/TransactionsPage'));
 // const SocialGiftsPage = lazy(() => import('@/pages/SocialGiftsPage'));
 const CategoriesPage = lazy(() => import('@/pages/CategoriesPage'));
 const StatisticsPage = lazy(() => import('@/pages/StatisticsPage'));
+const BudgetsPage = lazy(() => import('@/pages/BudgetsPage'));
+const ReportPage = lazy(() => import('@/pages/ReportPage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -80,6 +82,8 @@ export default function App() {
             <Route index element={<StatisticsPage />} />
             <Route path="transactions" element={<TransactionsPage />} />
             <Route path="categories" element={<CategoriesPage />} />
+            <Route path="budgets" element={<BudgetsPage />} />
+            <Route path="report" element={<ReportPage />} />
             <Route path="statistics" element={<Navigate to="/" replace />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>

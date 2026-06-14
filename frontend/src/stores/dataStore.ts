@@ -6,12 +6,16 @@ interface DataState {
   categoriesRev: number;
   membersRev: number;
   socialGiftsRev: number;
+  budgetsRev: number;
+  goalsRev: number;
 
   invalidateFamilies: () => void;
   invalidateTransactions: () => void;
   invalidateCategories: () => void;
   invalidateMembers: () => void;
   invalidateSocialGifts: () => void;
+  invalidateBudgets: () => void;
+  invalidateGoals: () => void;
   invalidateAll: () => void;
 }
 
@@ -21,12 +25,16 @@ export const useDataStore = create<DataState>((set) => ({
   categoriesRev: 0,
   membersRev: 0,
   socialGiftsRev: 0,
+  budgetsRev: 0,
+  goalsRev: 0,
 
   invalidateFamilies: () => set((s) => ({ familiesRev: s.familiesRev + 1 })),
   invalidateTransactions: () => set((s) => ({ transactionsRev: s.transactionsRev + 1 })),
   invalidateCategories: () => set((s) => ({ categoriesRev: s.categoriesRev + 1 })),
   invalidateMembers: () => set((s) => ({ membersRev: s.membersRev + 1 })),
   invalidateSocialGifts: () => set((s) => ({ socialGiftsRev: s.socialGiftsRev + 1 })),
+  invalidateBudgets: () => set((s) => ({ budgetsRev: s.budgetsRev + 1 })),
+  invalidateGoals: () => set((s) => ({ goalsRev: s.goalsRev + 1 })),
   invalidateAll: () =>
     set((s) => ({
       familiesRev: s.familiesRev + 1,
@@ -34,5 +42,7 @@ export const useDataStore = create<DataState>((set) => ({
       categoriesRev: s.categoriesRev + 1,
       membersRev: s.membersRev + 1,
       socialGiftsRev: s.socialGiftsRev + 1,
+      budgetsRev: s.budgetsRev + 1,
+      goalsRev: s.goalsRev + 1,
     })),
 }));

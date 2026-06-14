@@ -21,6 +21,8 @@ import {
   ChevronRight,
   Camera,
   Settings,
+  Target,
+  Sparkles,
 } from 'lucide-react';
 
 import { cn } from '@/utils/cn';
@@ -54,6 +56,8 @@ import { useToast } from '@/hooks/useToast';
 const navItems = [
   { to: '/', label: '统计分析', icon: BarChart3 },
   { to: '/transactions', label: '交易记录', icon: Receipt },
+  { to: '/budgets', label: '预算目标', icon: Target },
+  { to: '/report', label: 'AI 报告', icon: Sparkles },
   { to: '/categories', label: '分类管理', icon: FolderOpen },
   { to: '/settings', label: '设置', icon: Settings },
 ];
@@ -353,6 +357,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                 key={item.to}
                 to={item.to}
                 onClick={onClose}
+                viewTransition
                 className={cn(
                   'group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold transition-all duration-200',
                   isActive

@@ -6,8 +6,16 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm install
+# Only copy package.json (not the host lockfile): the lockfile is generated on
+# macOS and omits Linux/musl optional native deps (npm bug #4828), which breaks
+# Vite/rolldown's platform binding. Letting npm resolve in-container fixes it.
+# React canary also conflicts with Radix UI peer ranges, hence --legacy-peer-deps.
+COPY frontend/package.json ./
+# Use a China-region npm mirror to avoid slow/stalled downloads from the default
+# registry; bump network timeout for resilience on flaky connections.
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm config set fetch-timeout 600000 \
+    && npm install --legacy-peer-deps
 
 COPY frontend/ ./
 RUN npm run build
