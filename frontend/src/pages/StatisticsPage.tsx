@@ -12,6 +12,9 @@ import {
   CalendarDays,
   Wallet,
   HeartPulse,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
 } from 'lucide-react';
 import {
   Card,
@@ -47,6 +50,7 @@ import type {
 } from '@/types';
 import { formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
+import { usePersistentState } from '@/hooks/usePersistentState';
 import { TransactionListDialog } from '@/components/TransactionListDialog';
 
 
@@ -1209,8 +1213,29 @@ function SocialGiftsTab({ year }: { year: number }) {
   const [data, setData] = useState<SocialSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [clickedPerson, setClickedPerson] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<'name' | 'given' | 'received' | 'net'>('net');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const transactionsRev = useDataStore((s) => s.transactionsRev);
   const socialGiftsRev = useDataStore((s) => s.socialGiftsRev);
+
+  function toggleSort(key: 'name' | 'given' | 'received' | 'net') {
+    if (key === sortKey) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir(key === 'name' ? 'asc' : 'desc');
+    }
+  }
+
+  const sortIcon = (key: 'name' | 'given' | 'received' | 'net') => {
+    if (sortKey !== key)
+      return <ChevronsUpDown className="size-3.5 opacity-40" />;
+    return sortDir === 'asc' ? (
+      <ChevronUp className="size-3.5" />
+    ) : (
+      <ChevronDown className="size-3.5" />
+    );
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -1224,7 +1249,6 @@ function SocialGiftsTab({ year }: { year: number }) {
   }, [year, transactionsRev, socialGiftsRev]);
 
   const showGiven = viewType === 'expense';
-  const showReceived = viewType === 'income';
 
   const totalGiven = data.reduce(
     (s, d) => s + (parseFloat(d.given) || 0),
@@ -1246,6 +1270,21 @@ function SocialGiftsTab({ year }: { year: number }) {
     .sort((a, b) =>
       showGiven ? a.given - b.given : a.received - b.received,
     );
+
+  const sortedData = useMemo(() => {
+    const arr = [...data];
+    arr.sort((a, b) => {
+      if (sortKey === 'name') {
+        return sortDir === 'asc'
+          ? a.person_name.localeCompare(b.person_name)
+          : b.person_name.localeCompare(a.person_name);
+      }
+      const av = parseFloat(a[sortKey]) || 0;
+      const bv = parseFloat(b[sortKey]) || 0;
+      return sortDir === 'asc' ? av - bv : bv - av;
+    });
+    return arr;
+  }, [data, sortKey, sortDir]);
 
   const socialBarOption = useMemo((): echarts.EChartsCoreOption => {
     const color = showGiven ? EXPENSE_COLOR : INCOME_COLOR;
@@ -1382,33 +1421,62 @@ function SocialGiftsTab({ year }: { year: number }) {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b text-muted-foreground">
-                      <th className="text-left py-2.5 font-medium">姓名</th>
-                      {showGiven && <th className="text-right py-2.5 font-medium">送出</th>}
-                      {showReceived && <th className="text-right py-2.5 font-medium">收到</th>}
-                      <th className="text-right py-2.5 font-medium">净额</th>
+                      <th className="text-left py-2.5 font-medium">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+                          onClick={() => toggleSort('name')}
+                        >
+                          姓名 {sortIcon('name')}
+                        </button>
+                      </th>
+                      <th className="text-right py-2.5 font-medium">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 ml-auto hover:text-foreground transition-colors"
+                          onClick={() => toggleSort('given')}
+                        >
+                          送出 {sortIcon('given')}
+                        </button>
+                      </th>
+                      <th className="text-right py-2.5 font-medium">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 ml-auto hover:text-foreground transition-colors"
+                          onClick={() => toggleSort('received')}
+                        >
+                          收入 {sortIcon('received')}
+                        </button>
+                      </th>
+                      <th className="text-right py-2.5 font-medium">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 ml-auto hover:text-foreground transition-colors"
+                          onClick={() => toggleSort('net')}
+                        >
+                          净额 {sortIcon('net')}
+                        </button>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {data.map((row) => {
+                    {sortedData.map((row) => {
                       const net = parseFloat(row.net) || 0;
                       return (
                         <tr
                           key={row.person_name}
-                          className="border-b last:border-0 hover:bg-muted/50 transition-colors"
+                          className="border-b last:border-0 hover:bg-muted/50 transition-colors cursor-pointer"
+                          onClick={() => setClickedPerson(row.person_name)}
                         >
                           <td className="py-2.5 font-medium">
                             {row.person_name}
                           </td>
-                          {showGiven && (
-                            <td className="py-2.5 text-right text-expense tabular-nums">
-                              {formatCurrency(row.given, 'CNY')}
-                            </td>
-                          )}
-                          {showReceived && (
-                            <td className="py-2.5 text-right text-income tabular-nums">
-                              {formatCurrency(row.received, 'CNY')}
-                            </td>
-                          )}
+                          <td className="py-2.5 text-right text-expense tabular-nums">
+                            {formatCurrency(row.given, 'CNY')}
+                          </td>
+                          <td className="py-2.5 text-right text-income tabular-nums">
+                            {formatCurrency(row.received, 'CNY')}
+                          </td>
                           <td
                             className={cn(
                               'py-2.5 text-right font-medium tabular-nums',
@@ -1451,7 +1519,9 @@ function SocialGiftsTab({ year }: { year: number }) {
 
 export default function StatisticsPage() {
   // Single source of truth for the selected year, shared across every tab.
-  const [year, setYear] = useState(dayjs().year());
+  // Persisted so a refresh keeps the year + active tab the user was viewing.
+  const [year, setYear] = usePersistentState('stats:year', dayjs().year());
+  const [tab, setTab] = usePersistentState('stats:tab', 'overview');
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 max-w-5xl mx-auto">
@@ -1460,7 +1530,7 @@ export default function StatisticsPage() {
         <YearSelector year={year} onChange={setYear} />
       </div>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="w-full grid grid-cols-4">
           <TabsTrigger value="overview" className="text-xs sm:text-sm">
             汇总分析

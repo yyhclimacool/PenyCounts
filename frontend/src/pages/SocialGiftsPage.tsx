@@ -48,8 +48,10 @@ import { cn } from '@/utils/cn';
 import { useToast } from '@/hooks/useToast';
 import { DatePicker } from '@/components/ui/date-picker';
 import { useDataStore } from '@/stores/dataStore';
+import { loadPersisted, savePersisted } from '@/utils/persist';
 
 const PER_PAGE = 20;
+const LAST_GIFT_DATE_KEY = 'gift:lastDate';
 
 interface FormState {
   type: 'give' | 'receive';
@@ -163,7 +165,11 @@ export default function SocialGiftsPage() {
 
   function openAddDialog() {
     setEditingGift(null);
-    setForm(defaultForm);
+    // Default to the last date the user picked (persisted), not always today.
+    setForm({
+      ...defaultForm,
+      date: loadPersisted(LAST_GIFT_DATE_KEY, defaultForm.date),
+    });
     setDialogOpen(true);
   }
 
@@ -216,6 +222,9 @@ export default function SocialGiftsPage() {
         await socialGiftsService.create(payload);
         addToast({ title: '记录已添加' });
       }
+
+      // Remember this date so the next "add" defaults to it.
+      savePersisted(LAST_GIFT_DATE_KEY, form.date);
 
       setDialogOpen(false);
       fetchGifts();

@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
-import { Outlet } from 'react-router';
+import { useState, useEffect, useRef } from 'react';
+import { Outlet, useLocation, useNavigate } from 'react-router';
 import { Menu, MessageSquare, Users } from 'lucide-react';
+
+import { loadPersisted, savePersisted } from '@/utils/persist';
 
 import { cn } from '@/utils/cn';
 import { Button } from '@/components/ui/button';
@@ -19,10 +21,34 @@ import { useDataStore } from '@/stores/dataStore';
 import * as familyService from '@/services/family';
 import type { Family } from '@/types';
 
+const LAST_ROUTE_KEY = 'app:lastRoute';
+
 export function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { isOpen: chatOpen, setOpen: setChatOpen } = useChatStore();
   const { user } = useAuthStore();
+
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // On first mount, if we land on the index page restore the page the user was
+  // last on. A refresh on a deep route (e.g. /transactions) keeps its URL and
+  // skips this; the restore only kicks in on a fresh "/" landing (after login
+  // or reopening the app).
+  const didRestore = useRef(false);
+  useEffect(() => {
+    if (didRestore.current) return;
+    didRestore.current = true;
+    if (location.pathname === '/') {
+      const last = loadPersisted<string>(LAST_ROUTE_KEY, '/');
+      if (last && last !== '/') navigate(last, { replace: true });
+    }
+  }, [location.pathname, navigate]);
+
+  // Remember the current route so it can be restored next time.
+  useEffect(() => {
+    savePersisted(LAST_ROUTE_KEY, location.pathname);
+  }, [location.pathname]);
 
   const [families, setFamilies] = useState<Family[]>([]);
   const [switching, setSwitching] = useState(false);

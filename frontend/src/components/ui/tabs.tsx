@@ -37,7 +37,7 @@ TabsTrigger.displayName = TabsPrimitive.Trigger.displayName;
 const TabsContent = React.forwardRef<
   React.ComponentRef<typeof TabsPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.Content>
->(({ className, ...props }, ref) => (
+>(({ className, children, ...props }, ref) => (
   <TabsPrimitive.Content
     ref={ref}
     className={cn(
@@ -45,7 +45,12 @@ const TabsContent = React.forwardRef<
       className,
     )}
     {...props}
-  />
+  >
+    {/* Radix suppresses CSS mount animations on Content itself (it inlines
+        animationDuration: 0s on mount), so we animate an inner wrapper instead.
+        Content unmounts/remounts on tab switch, so this replays each time. */}
+    <div className="animate-slide-up">{children}</div>
+  </TabsPrimitive.Content>
 ));
 TabsContent.displayName = TabsPrimitive.Content.displayName;
 

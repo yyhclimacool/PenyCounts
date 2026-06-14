@@ -50,6 +50,10 @@ import { formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import { useToast } from '@/hooks/useToast';
 import { DatePicker } from '@/components/ui/date-picker';
+import { loadPersisted, savePersisted } from '@/utils/persist';
+import { usePersistentState } from '@/hooks/usePersistentState';
+
+const LAST_TX_DATE_KEY = 'tx:lastDate';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
@@ -91,8 +95,8 @@ export default function TransactionsPage() {
   const [filterCategoryId, setFilterCategoryId] = useState<string>('all');
   const [filterSubcategoryId, setFilterSubcategoryId] = useState<string>('all');
   const [filterMember, setFilterMember] = useState<string>('all');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+  const [dateFrom, setDateFrom] = usePersistentState('tx:filterDateFrom', '');
+  const [dateTo, setDateTo] = usePersistentState('tx:filterDateTo', '');
   const [minAmount, setMinAmount] = useState('');
   const [maxAmount, setMaxAmount] = useState('');
   const [searchText, setSearchText] = useState('');
@@ -210,10 +214,40 @@ export default function TransactionsPage() {
 
   function openAddDialog() {
     setEditingTx(null);
-    setForm(defaultForm);
+    // Default to the last date the user picked (persisted), not always today.
+    setForm({
+      ...defaultForm,
+      date: loadPersisted(LAST_TX_DATE_KEY, defaultForm.date),
+    });
     setMemberTags([]);
     setMemberInput('');
     setDialogOpen(true);
+  }
+
+  const hasActiveFilters =
+    filterType !== 'all' ||
+    filterCategoryId !== 'all' ||
+    filterSubcategoryId !== 'all' ||
+    filterMember !== 'all' ||
+    dateFrom !== '' ||
+    dateTo !== '' ||
+    minAmount !== '' ||
+    maxAmount !== '' ||
+    searchInput !== '';
+
+  function resetFilters() {
+    clearTimeout(searchTimerRef.current);
+    setFilterType('all');
+    setFilterCategoryId('all');
+    setFilterSubcategoryId('all');
+    setFilterMember('all');
+    setDateFrom('');
+    setDateTo('');
+    setMinAmount('');
+    setMaxAmount('');
+    setSearchText('');
+    setSearchInput('');
+    setPage(1);
   }
 
   function openEditDialog(tx: Transaction) {
@@ -266,6 +300,9 @@ export default function TransactionsPage() {
         await transactionsService.create(payload);
         addToast({ title: '交易已添加' });
       }
+
+      // Remember this date so the next "add" defaults to it.
+      savePersisted(LAST_TX_DATE_KEY, form.date);
 
       setDialogOpen(false);
       fetchTransactions();
@@ -467,15 +504,28 @@ export default function TransactionsPage() {
             </div>
           </div>
 
-          {/* Advanced filters toggle */}
-          <button
-            type="button"
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-3 cursor-pointer transition-colors"
-            onClick={() => setShowAdvanced(!showAdvanced)}
-          >
-            {showAdvanced ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-            高级筛选
-          </button>
+          {/* Advanced filters toggle + reset */}
+          <div className="flex items-center justify-between mt-3">
+            <button
+              type="button"
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+            >
+              {showAdvanced ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+              高级筛选
+            </button>
+            {hasActiveFilters && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+                onClick={resetFilters}
+              >
+                <X className="size-3.5" />
+                重置搜索条件
+              </Button>
+            )}
+          </div>
 
           {showAdvanced && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3 pt-3 border-t border-border/50">
