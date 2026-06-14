@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
 import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
@@ -216,75 +216,122 @@ function MonthlyDrilldownChart({
   data: MonthlyTrend[];
   onDayClick: (date: string, title: string) => void;
 }) {
-  const chartRef = useRef<ReactECharts>(null);
-  const [drilledMonth, setDrilledMonth] = useState<number | null>(null);
+  const [drill, setDrill] = useState<{ month: number; categories: string[]; values: number[] } | null>(
+    null,
+  );
 
   const color = type === 'expense' ? EXPENSE_COLOR : INCOME_COLOR;
   const label = TYPE_LABEL[type];
 
-  // A single bar series whose data rows carry [x, y, groupId, childGroupId].
-  // childGroupId on the month rows matches groupId on the day rows so ECharts
-  // can morph one month bar into that month's daily bars (and back).
+  // Drilldown follows ECharts' canonical scheme:
+  //   - a single bar series with a CONSTANT id (identifies the same series across levels)
+  //   - root data items carry a per-item `groupId` = the group they drill into
+  //   - the drilled level sets a series-level `dataGroupId` so all its bars belong
+  //     to that group and correctly combine back into the parent month bar.
   const buildOption = useCallback(
-    (rows: (string | number)[][]): echarts.EChartsCoreOption => ({
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'shadow' },
-        ...TOOLTIP_STYLE,
-        formatter: (params: any) => {
-          const items = Array.isArray(params) ? params : [params];
-          const p = items[0];
-          const v = Array.isArray(p?.value) ? p.value[1] : p?.value;
-          return `<div style="font-weight:500;margin-bottom:4px">${p?.axisValue}</div><div style="display:flex;align-items:center;gap:6px;line-height:1.8"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color}"></span><span style="color:#6b7280">${label}:</span><span style="font-weight:500">${formatCurrency(v ?? 0, 'CNY')}</span></div>`;
+    (
+      categories: string[],
+      values: number[],
+      groupIds: string[] | null,
+      dataGroupId: string | null,
+    ): echarts.EChartsCoreOption => {
+      const hex = color.replace('#', '');
+      const r = parseInt(hex.slice(0, 2), 16);
+      const g = parseInt(hex.slice(2, 4), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      // Soft vertical gradient: solid at the top, fading toward the baseline.
+      const barFill = new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+        { offset: 0, color: `rgba(${r}, ${g}, ${b}, 0.95)` },
+        { offset: 1, color: `rgba(${r}, ${g}, ${b}, 0.35)` },
+      ]);
+      const seriesData = groupIds
+        ? values.map((v, i) => ({ value: v, groupId: groupIds[i] }))
+        : values;
+      return {
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'none' },
+          ...TOOLTIP_STYLE,
+          formatter: (params: any) => {
+            const items = Array.isArray(params) ? params : [params];
+            const p = items[0];
+            const raw = p?.value;
+            const v = Array.isArray(raw) ? raw[1] : raw;
+            return `<div style="font-weight:500;margin-bottom:4px">${p?.axisValue}</div><div style="display:flex;align-items:center;gap:6px;line-height:1.8"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color}"></span><span style="color:#6b7280">${label}:</span><span style="font-weight:500">${formatCurrency(v ?? 0, 'CNY')}</span></div>`;
+          },
         },
-      },
-      grid: { left: 60, right: 16, top: 16, bottom: 28 },
-      xAxis: {
-        type: 'category',
-        axisPointer: { type: 'shadow' },
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { fontSize: 11 },
-      },
-      yAxis: {
-        type: 'value',
-        name: '金额',
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { fontSize: 12, formatter: formatYAxis },
-        splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
-      },
-      animationDurationUpdate: 500,
-      series: [
-        {
-          type: 'bar',
-          name: label,
-          dimensions: ['x', 'y', 'groupId', 'childGroupId'],
-          encode: { x: 'x', y: 'y', itemGroupId: 'groupId', itemChildGroupId: 'childGroupId' },
-          data: rows,
-          itemStyle: { color, borderRadius: [4, 4, 0, 0] },
-          universalTransition: { enabled: true, divideShape: 'clone' },
+        grid: { left: 52, right: 16, top: 16, bottom: 28 },
+        xAxis: {
+          type: 'category',
+          data: categories,
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { fontSize: 11, color: '#9ca3af' },
         },
-      ],
-    }),
+        yAxis: {
+          type: 'value',
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { fontSize: 11, color: '#9ca3af', formatter: formatYAxis },
+          splitLine: { lineStyle: { type: 'dashed', opacity: 0.18 } },
+        },
+        // Staggered "elastic" entrance: each bar drops in slightly after the
+        // previous one. `animationEasing` only affects the initial enter, so the
+        // cross-level drill-down morph (an update) keeps its smooth easing.
+        animationEasing: 'elasticOut',
+        animationDurationUpdate: 500,
+        animationDelayUpdate: (idx: number) => idx * 5,
+        series: [
+          {
+            id: 'monthly-drilldown',
+            type: 'bar',
+            name: label,
+            ...(dataGroupId ? { dataGroupId } : {}),
+            data: seriesData,
+            barMaxWidth: 18,
+            barCategoryGap: '45%',
+            itemStyle: { color: barFill, borderRadius: [99, 99, 99, 99] },
+            emphasis: { focus: 'series', itemStyle: { color } },
+            animationDelay: (idx: number) => idx * 30,
+            universalTransition: { enabled: true, divideShape: 'clone' },
+          },
+        ],
+      };
+    },
     [color, label],
   );
 
-  const rootRows = useMemo<(string | number)[][]>(
+  const rootCategories = useMemo(() => MONTHS.map((m) => `${m}月`), []);
+  const rootValues = useMemo(
     () =>
       MONTHS.map((m) => {
         const row = data.find((t) => t.month === m);
-        const val = parseFloat(row?.[type] ?? '0') || 0;
-        return [`${m}月`, val, 'year', `m-${m}`];
+        return parseFloat(row?.[type] ?? '0') || 0;
       }),
     [data, type],
   );
+  const rootGroupIds = useMemo(() => MONTHS.map((m) => `m-${m}`), []);
 
-  const rootOption = useMemo(() => buildOption(rootRows), [buildOption, rootRows]);
+  const rootOption = useMemo(
+    () => buildOption(rootCategories, rootValues, rootGroupIds, null),
+    [buildOption, rootCategories, rootValues, rootGroupIds],
+  );
+
+  // Single source of truth: the option is derived from the current drill level.
+  // ECharts morphs between consecutive setOption calls (merge) via groupId, so we
+  // never imperatively setOption — that previously fought echarts-for-react and
+  // left stale / misplaced bars when drilling back.
+  const option = useMemo(
+    () =>
+      drill
+        ? buildOption(drill.categories, drill.values, null, `m-${drill.month}`)
+        : rootOption,
+    [drill, buildOption, rootOption],
+  );
 
   // Year / type / data change → snap back to the monthly root level.
   useEffect(() => {
-    setDrilledMonth(null);
+    setDrill(null);
   }, [year, type, data]);
 
   const goToMonth = useCallback(
@@ -293,38 +340,32 @@ function MonthlyDrilldownChart({
         .dailyTrend({ year, month: m })
         .catch(() => [] as DailyTrend[]);
       const days = daysInMonth(year, m);
-      const rows: (string | number)[][] = Array.from({ length: days }, (_, i) => {
-        const day = i + 1;
-        const r = daily.find((d) => d.day === day);
-        const val = parseFloat(r?.[type] ?? '0') || 0;
-        return [`${day}日`, val, `m-${m}`];
+      const categories = Array.from({ length: days }, (_, i) => `${i + 1}日`);
+      const values = Array.from({ length: days }, (_, i) => {
+        const r = daily.find((d) => d.day === i + 1);
+        return parseFloat(r?.[type] ?? '0') || 0;
       });
-      chartRef.current?.getEchartsInstance().setOption(buildOption(rows));
-      setDrilledMonth(m);
+      setDrill({ month: m, categories, values });
     },
-    [year, type, buildOption],
+    [year, type],
   );
 
-  const goBack = useCallback(() => {
-    chartRef.current?.getEchartsInstance().setOption(rootOption);
-    setDrilledMonth(null);
-  }, [rootOption]);
+  const goBack = useCallback(() => setDrill(null), []);
 
   const handleClick = useCallback(
     (params: any) => {
       if (params.componentType !== 'series') return;
-      const item = params.data;
-      if (drilledMonth == null) {
-        const childGroupId = Array.isArray(item) ? item[3] : undefined;
-        if (childGroupId) goToMonth(Number(String(childGroupId).replace('m-', '')));
+      if (drill == null) {
+        const groupId = params.data?.groupId;
+        if (groupId) goToMonth(Number(String(groupId).replace('m-', '')));
       } else {
         const day = params.dataIndex + 1;
-        const mm = String(drilledMonth).padStart(2, '0');
+        const mm = String(drill.month).padStart(2, '0');
         const dd = String(day).padStart(2, '0');
-        onDayClick(`${year}-${mm}-${dd}`, `${drilledMonth}月${day}日 交易记录`);
+        onDayClick(`${year}-${mm}-${dd}`, `${drill.month}月${day}日 交易记录`);
       }
     },
-    [drilledMonth, goToMonth, onDayClick, year],
+    [drill, goToMonth, onDayClick, year],
   );
 
   return (
@@ -332,9 +373,9 @@ function MonthlyDrilldownChart({
       <div className="flex items-center justify-between">
         <h2 className="text-base font-semibold flex items-center gap-2">
           <CalendarDays className="size-4 text-primary" />
-          {drilledMonth == null ? '每月趋势' : `${drilledMonth}月每日${label}`}
+          {drill == null ? '每月趋势' : `${drill.month}月每日${label}`}
         </h2>
-        {drilledMonth != null && (
+        {drill != null && (
           <Button
             variant="ghost"
             size="sm"
@@ -352,8 +393,7 @@ function MonthlyDrilldownChart({
         <Card>
           <CardContent className="pt-6">
             <ReactECharts
-              ref={chartRef}
-              option={rootOption}
+              option={option}
               style={{ height: 320 }}
               notMerge
               onEvents={{ click: handleClick }}

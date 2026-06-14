@@ -23,6 +23,9 @@ import {
   Moon,
   Monitor,
   Palette,
+  Download,
+  Upload,
+  FileJson,
 } from 'lucide-react';
 import {
   Card,
@@ -56,9 +59,10 @@ import { useDataStore } from '@/stores/dataStore';
 import * as aiService from '@/services/ai';
 import * as membersService from '@/services/members';
 import * as familyService from '@/services/family';
+import * as settingsService from '@/services/settings';
 import { clearAllTransactions } from '@/services/transactions';
 import { updateProfile } from '@/services/auth';
-import type { LlmConfig, Member, Family, FamilyDetail } from '@/types';
+import type { LlmConfig, Member, Family, FamilyDetail, SettingsExport } from '@/types';
 import { cn } from '@/utils/cn';
 import { useToast } from '@/hooks/useToast';
 import { useTheme } from '@/hooks/useTheme';
@@ -112,6 +116,10 @@ export default function SettingsPage() {
   const [clearTxnDialogOpen, setClearTxnDialogOpen] = useState(false);
   const [clearTxnConfirmText, setClearTxnConfirmText] = useState('');
   const [clearingTxns, setClearingTxns] = useState(false);
+
+  const [exportingSettings, setExportingSettings] = useState(false);
+  const [importingSettings, setImportingSettings] = useState(false);
+  const settingsFileInputRef = useRef<HTMLInputElement>(null);
 
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [loadingMembers, setLoadingMembers] = useState(true);
@@ -411,6 +419,82 @@ export default function SettingsPage() {
       addToast({ title: '清除失败', variant: 'destructive' });
     } finally {
       setClearingTxns(false);
+    }
+  }
+
+  async function handleExportSettings() {
+    setExportingSettings(true);
+    try {
+      const data = await settingsService.exportSettings();
+      // Theme lives only in localStorage — fold it into the export here.
+      data.appearance = { theme };
+      const json = JSON.stringify(data, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const ts = `${now.getFullYear()}_${pad(now.getMonth() + 1)}_${pad(now.getDate())}_${pad(now.getHours())}_${pad(now.getMinutes())}_${pad(now.getSeconds())}`;
+      a.download = `penycounts_settings_${ts}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      addToast({ title: '配置已导出' });
+    } catch {
+      addToast({ title: '导出失败', variant: 'destructive' });
+    } finally {
+      setExportingSettings(false);
+    }
+  }
+
+  async function handleImportSettingsFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportingSettings(true);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as SettingsExport;
+      if (!parsed || typeof parsed.version !== 'number') {
+        throw new Error('invalid-format');
+      }
+      // Apply frontend-only appearance (theme) locally first.
+      if (parsed.appearance?.theme) {
+        setTheme(parsed.appearance.theme);
+      }
+      const result = await settingsService.importSettings(parsed);
+      // Reflect updated profile (avatar/nickname) in the auth store.
+      setUser(result.user);
+      // Refresh dependent UI across the app.
+      useDataStore.getState().invalidateAll();
+      // Refresh the sections shown on this page.
+      try {
+        setFamilies(await familyService.listFamilies());
+      } catch { /* ignore */ }
+      try {
+        setMembers(await membersService.list());
+      } catch { /* ignore */ }
+      try {
+        const cfg = await aiService.getConfig();
+        setLlmConfig(cfg);
+        setLlmForm({
+          provider: cfg.provider || 'openai',
+          api_url: cfg.api_url || '',
+          api_key: cfg.api_key || '',
+          model_name: cfg.model_name || '',
+        });
+      } catch { /* ignore */ }
+      const appliedMsg = result.applied.length ? result.applied.join('、') : '无可应用的配置';
+      addToast({ title: '配置导入完成', description: `已应用：${appliedMsg}` });
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      addToast({
+        title: msg || '导入失败，请检查文件格式',
+        variant: 'destructive',
+      });
+    } finally {
+      setImportingSettings(false);
+      if (settingsFileInputRef.current) settingsFileInputRef.current.value = '';
     }
   }
 
@@ -1277,6 +1361,63 @@ export default function SettingsPage() {
               跟随系统
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Settings import / export */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-primary/10 rounded-xl">
+              <FileJson className="size-5 text-primary" />
+            </div>
+            <div>
+              <CardTitle>配置导入导出</CardTitle>
+              <CardDescription>
+                以 JSON 格式备份或迁移你的配置：个人资料（头像、昵称）、家庭信息、LLM 配置、家庭成员、自定义分类、主题外观
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={handleExportSettings}
+              disabled={exportingSettings}
+            >
+              {exportingSettings ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Download className="size-4" />
+              )}
+              导出配置
+            </Button>
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => settingsFileInputRef.current?.click()}
+              disabled={importingSettings}
+            >
+              {importingSettings ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Upload className="size-4" />
+              )}
+              导入配置
+            </Button>
+            <input
+              ref={settingsFileInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={handleImportSettingsFile}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            导入为增量合并：已存在的成员/分类会跳过，不会删除现有数据。LLM 配置中包含 API Key，请妥善保管导出文件。
+          </p>
         </CardContent>
       </Card>
 

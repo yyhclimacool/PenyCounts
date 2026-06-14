@@ -96,7 +96,10 @@ export async function exportCsv(filters: Record<string, unknown> = {}): Promise<
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'transactions.csv';
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const timestamp = `${now.getFullYear()}_${pad(now.getMonth() + 1)}_${pad(now.getDate())}_${pad(now.getHours())}_${pad(now.getMinutes())}_${pad(now.getSeconds())}`;
+  a.download = `transactions_${timestamp}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }

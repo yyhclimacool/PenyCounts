@@ -173,3 +173,44 @@ export interface PaginatedResponse<T> {
   page: number;
   per_page: number;
 }
+
+// ── Settings import/export (JSON) ────────────────────────────────────
+// A versioned envelope aggregating the user's configurable data. Every
+// section is optional so the format stays backward/forward compatible —
+// new features only add an optional field here. `appearance` is handled
+// purely on the client (theme lives in localStorage, not the backend).
+
+export interface SettingsExport {
+  version: number;
+  app?: string;
+  exported_at?: string;
+  user?: {
+    nickname?: string;
+    avatar_url?: string | null;
+  };
+  family?: {
+    name?: string;
+  };
+  llm_config?: {
+    provider: string;
+    api_url: string;
+    api_key?: string | null;
+    model_name: string;
+  } | null;
+  members?: string[];
+  categories?: {
+    name: string;
+    type: string;
+    icon: string;
+    subcategories: { name: string; icon: string }[];
+  }[];
+  appearance?: {
+    theme?: 'light' | 'dark' | 'system';
+  };
+}
+
+export interface SettingsImportResult {
+  applied: string[];
+  skipped: string[];
+  user: User;
+}

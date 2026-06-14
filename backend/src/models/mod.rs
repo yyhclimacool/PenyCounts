@@ -423,6 +423,84 @@ pub struct ImportResult {
     pub errors: Vec<String>,
 }
 
+// ── Settings import/export (JSON) ────────────────────────────────────
+//
+// A single, version-tagged envelope that aggregates a user's configurable
+// data into one JSON document. Every section is optional so the format stays
+// backward/forward compatible: importing an older file simply skips absent
+// sections, and adding a new feature only requires adding a new optional
+// field here (plus its handling in `services::settings`).
+
+/// Bump whenever the export shape changes in a breaking way.
+pub const SETTINGS_EXPORT_VERSION: u32 = 1;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SettingsExport {
+    pub version: u32,
+    #[serde(default)]
+    pub app: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exported_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<UserSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<FamilySettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_config: Option<LlmConfigSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub categories: Option<Vec<CategorySettings>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UserSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FamilySettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LlmConfigSettings {
+    pub provider: String,
+    pub api_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    pub model_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CategorySettings {
+    pub name: String,
+    pub r#type: String,
+    pub icon: String,
+    #[serde(default)]
+    pub subcategories: Vec<SubcategorySettings>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SubcategorySettings {
+    pub name: String,
+    pub icon: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SettingsImportResult {
+    /// Human-readable list of sections that were applied.
+    pub applied: Vec<String>,
+    /// Sections that were present but skipped (with reason).
+    pub skipped: Vec<String>,
+    /// Refreshed user, so the client can update avatar/nickname immediately.
+    pub user: UserResponse,
+}
+
 impl UserResponse {
     pub fn from_user(user: &User) -> Self {
         Self {

@@ -3,6 +3,7 @@ pub mod auth;
 pub mod categories;
 pub mod family;
 pub mod members;
+pub mod settings;
 pub mod social_gifts;
 pub mod stats;
 pub mod transactions;
@@ -204,6 +205,15 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
         .route(
             "/api/families/{id}/regenerate-code",
             axum::routing::post(family::regenerate_invite_code),
+        )
+        // Settings import/export (JSON)
+        .route(
+            "/api/settings/export",
+            axum::routing::get(settings::export_settings),
+        )
+        .route(
+            "/api/settings/import",
+            axum::routing::post(settings::import_settings),
         )
         // Health
         .route("/api/health", axum::routing::get(health))
