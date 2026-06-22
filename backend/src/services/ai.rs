@@ -9,8 +9,9 @@ use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::models::{
-    Category, ChatMessage, CreateSocialGiftRequest, CreateTransactionRequest, LlmConfig,
-    LlmConfigRequest, Member, OcrAvailability, OcrResult, SocialGiftFilter, Subcategory,
+    AiReport, AiReportSummary, Category, ChatMessage, CreateSocialGiftRequest,
+    CreateTransactionRequest, LlmConfig, LlmConfigRequest, Member, OcrAvailability, OcrResult,
+    SaveReportRequest, SocialGiftFilter, Subcategory,
 };
 use crate::services::{social_gift, stats, transaction};
 
@@ -2202,6 +2203,122 @@ pub async fn ocr_extract(
     })?;
 
     Ok(result)
+}
+
+// ── Report archive (persisted AI reports) ────────────────────────────
+
+/// Upsert a report for (family, period, year, month). Regenerating the same
+/// period overwrites the previous content.
+pub async fn save_report(
+    pool: &PgPool,
+    user_id: Uuid,
+    family_id: Uuid,
+    req: SaveReportRequest,
+) -> Result<AiReport, AppError> {
+    if req.period != "monthly" && req.period != "yearly" {
+        return Err(AppError::BadRequest("无效的周期".to_string()));
+    }
+    if req.content.trim().is_empty() {
+        return Err(AppError::BadRequest("报告内容为空".to_string()));
+    }
+    let month = if req.period == "monthly" {
+        req.month
+    } else {
+        None
+    };
+
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM ai_reports
+         WHERE family_id = $1 AND period = $2 AND year = $3
+           AND month IS NOT DISTINCT FROM $4",
+    )
+    .bind(family_id)
+    .bind(&req.period)
+    .bind(req.year)
+    .bind(month)
+    .fetch_optional(pool)
+    .await?;
+
+    let report = if let Some(id) = existing {
+        sqlx::query_as::<_, AiReport>(
+            "UPDATE ai_reports
+             SET content = $1, model_name = $2, updated_at = now()
+             WHERE id = $3
+             RETURNING id, period, year, month, content, model_name, created_at, updated_at",
+        )
+        .bind(&req.content)
+        .bind(&req.model_name)
+        .bind(id)
+        .fetch_one(pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, AiReport>(
+            "INSERT INTO ai_reports (id, family_id, user_id, period, year, month, content, model_name)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             RETURNING id, period, year, month, content, model_name, created_at, updated_at",
+        )
+        .bind(Uuid::new_v4())
+        .bind(family_id)
+        .bind(user_id)
+        .bind(&req.period)
+        .bind(req.year)
+        .bind(month)
+        .bind(&req.content)
+        .bind(&req.model_name)
+        .fetch_one(pool)
+        .await?
+    };
+
+    Ok(report)
+}
+
+pub async fn list_reports(
+    pool: &PgPool,
+    family_id: Uuid,
+) -> Result<Vec<AiReportSummary>, AppError> {
+    let rows = sqlx::query_as::<_, AiReportSummary>(
+        "SELECT id, period, year, month, model_name, created_at, updated_at
+         FROM ai_reports
+         WHERE family_id = $1
+         ORDER BY updated_at DESC",
+    )
+    .bind(family_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn get_report(
+    pool: &PgPool,
+    family_id: Uuid,
+    report_id: Uuid,
+) -> Result<AiReport, AppError> {
+    sqlx::query_as::<_, AiReport>(
+        "SELECT id, period, year, month, content, model_name, created_at, updated_at
+         FROM ai_reports
+         WHERE id = $1 AND family_id = $2",
+    )
+    .bind(report_id)
+    .bind(family_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("报告不存在".to_string()))
+}
+
+pub async fn delete_report(
+    pool: &PgPool,
+    family_id: Uuid,
+    report_id: Uuid,
+) -> Result<(), AppError> {
+    let result = sqlx::query("DELETE FROM ai_reports WHERE id = $1 AND family_id = $2")
+        .bind(report_id)
+        .bind(family_id)
+        .execute(pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("报告不存在".to_string()));
+    }
+    Ok(())
 }
 
 /// Pull the first JSON object out of a model reply, tolerating ```json fences

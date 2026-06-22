@@ -169,6 +169,14 @@ pub fn create_router(pool: PgPool, config: Arc<AppConfig>) -> Router {
             "/api/ai/ocr/availability",
             axum::routing::get(ai::ocr_availability),
         )
+        .route(
+            "/api/ai/reports",
+            axum::routing::get(ai::list_reports).post(ai::save_report),
+        )
+        .route(
+            "/api/ai/reports/{id}",
+            axum::routing::get(ai::get_report).delete(ai::delete_report),
+        )
         // Budgets
         .route(
             "/api/budgets",

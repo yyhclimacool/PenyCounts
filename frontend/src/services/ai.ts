@@ -1,5 +1,30 @@
-import type { ChatMessage, LlmConfig } from '@/types';
+import type {
+  AiReport,
+  AiReportSummary,
+  ChatMessage,
+  LlmConfig,
+  SaveReportRequest,
+} from '@/types';
 import { AUTH_TOKEN_KEY, api } from './api';
+
+export async function listReports(): Promise<AiReportSummary[]> {
+  const { data } = await api.get<AiReportSummary[]>('/ai/reports');
+  return data;
+}
+
+export async function getReport(id: string): Promise<AiReport> {
+  const { data } = await api.get<AiReport>(`/ai/reports/${id}`);
+  return data;
+}
+
+export async function saveReport(req: SaveReportRequest): Promise<AiReport> {
+  const { data } = await api.post<AiReport>('/ai/reports', req);
+  return data;
+}
+
+export async function deleteReport(id: string): Promise<void> {
+  await api.delete(`/ai/reports/${id}`);
+}
 
 export async function getConfig(): Promise<LlmConfig> {
   const { data } = await api.get<LlmConfig>('/ai/config');

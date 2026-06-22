@@ -12,8 +12,8 @@ use crate::config::AppState;
 use crate::errors::AppError;
 use crate::middleware::AuthUser;
 use crate::models::{
-    ChatMessage, ChatRequest, LlmConfig, LlmConfigRequest, OcrAvailability, OcrResult,
-    ReportRequest,
+    AiReport, AiReportSummary, ChatMessage, ChatRequest, LlmConfig, LlmConfigRequest,
+    OcrAvailability, OcrResult, ReportRequest, SaveReportRequest,
 };
 use crate::services;
 
@@ -136,6 +136,42 @@ pub async fn report(
     )
     .await?;
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))))
+}
+
+pub async fn save_report(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<SaveReportRequest>,
+) -> Result<(StatusCode, Json<AiReport>), AppError> {
+    let report =
+        services::ai::save_report(&state.pool, auth.user_id, auth.family_id, req).await?;
+    Ok((StatusCode::CREATED, Json(report)))
+}
+
+pub async fn list_reports(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<AiReportSummary>>, AppError> {
+    let reports = services::ai::list_reports(&state.pool, auth.family_id).await?;
+    Ok(Json(reports))
+}
+
+pub async fn get_report(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<AiReport>, AppError> {
+    let report = services::ai::get_report(&state.pool, auth.family_id, id).await?;
+    Ok(Json(report))
+}
+
+pub async fn delete_report(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    services::ai::delete_report(&state.pool, auth.family_id, id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn ocr_availability(

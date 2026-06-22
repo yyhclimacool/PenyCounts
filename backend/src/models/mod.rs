@@ -247,6 +247,43 @@ pub struct ReportRequest {
     pub month: Option<u32>,
 }
 
+// Stored/archived AI report.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct AiReport {
+    pub id: Uuid,
+    pub period: String,
+    pub year: i32,
+    pub month: Option<i32>,
+    pub content: String,
+    pub model_name: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Lightweight list item (omits the full markdown body).
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct AiReportSummary {
+    pub id: Uuid,
+    pub period: String,
+    pub year: i32,
+    pub month: Option<i32>,
+    pub model_name: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SaveReportRequest {
+    #[serde(default = "default_report_period")]
+    pub period: String,
+    pub year: i32,
+    #[serde(default)]
+    pub month: Option<i32>,
+    pub content: String,
+    #[serde(default)]
+    pub model_name: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateFamilyRequest {
     pub name: String,

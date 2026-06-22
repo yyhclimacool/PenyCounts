@@ -210,6 +210,28 @@ export interface InsightsResponse {
 
 // ── Budgets & savings goals ──────────────────────────────────────────
 
+// ── AI report archive ────────────────────────────────────────────────
+export interface AiReport {
+  id: string;
+  period: 'monthly' | 'yearly';
+  year: number;
+  month: number | null;
+  content: string;
+  model_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type AiReportSummary = Omit<AiReport, 'content'>;
+
+export interface SaveReportRequest {
+  period: 'monthly' | 'yearly';
+  year: number;
+  month?: number | null;
+  content: string;
+  model_name?: string | null;
+}
+
 // ── OCR (photo bookkeeping) ──────────────────────────────────────────
 export interface OcrAvailability {
   available: boolean;

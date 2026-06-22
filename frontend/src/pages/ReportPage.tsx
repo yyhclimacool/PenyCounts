@@ -1,10 +1,27 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Sparkles, Download, Loader2, FileText, RefreshCw } from 'lucide-react';
-import { streamReport, type ReportParams } from '@/services/ai';
+import {
+  Sparkles,
+  Download,
+  Loader2,
+  FileText,
+  RefreshCw,
+  History,
+  Trash2,
+} from 'lucide-react';
+import {
+  streamReport,
+  listReports,
+  getReport,
+  saveReport,
+  deleteReport,
+  type ReportParams,
+} from '@/services/ai';
 import { useToast } from '@/hooks/useToast';
+import { usePersistentState } from '@/hooks/usePersistentState';
 import { useAuthStore } from '@/stores/authStore';
+import type { AiReportSummary } from '@/types';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import {
@@ -108,19 +125,37 @@ export default function ReportPage() {
   const user = useAuthStore((s) => s.user);
   const now = useMemo(() => new Date(), []);
 
-  const [period, setPeriod] = useState<Period>('monthly');
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
+  // Persisted across navigation so the report survives tab switches.
+  const [period, setPeriod] = usePersistentState<Period>('report:period', 'monthly');
+  const [year, setYear] = usePersistentState('report:year', now.getFullYear());
+  const [month, setMonth] = usePersistentState('report:month', now.getMonth() + 1);
+  const [report, setReport] = usePersistentState('report:content', '');
+  const [hasRun, setHasRun] = usePersistentState('report:hasRun', false);
 
-  const [report, setReport] = useState('');
   const [streaming, setStreaming] = useState(false);
-  const [hasRun, setHasRun] = useState(false);
   const [exporting, setExporting] = useState(false);
+
+  const [history, setHistory] = useState<AiReportSummary[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const captureRef = useRef<HTMLDivElement>(null);
 
   const yearOptions = useMemo(buildYearOptions, []);
+
+  const refreshHistory = () => {
+    void listReports()
+      .then(setHistory)
+      .catch(() => {
+        /* history is non-critical; ignore fetch errors */
+      });
+  };
+
+  useEffect(() => {
+    refreshHistory();
+    return () => abortRef.current?.abort();
+  }, []);
 
   const periodLabel =
     period === 'monthly' ? `${year} 年 ${month} 月` : `${year} 年度`;
@@ -144,10 +179,15 @@ export default function ReportPage() {
     setStreaming(true);
     setHasRun(true);
 
+    let acc = '';
+
     void streamReport(
       params,
       {
-        onDelta: (chunk) => setReport((prev) => prev + chunk),
+        onDelta: (chunk) => {
+          acc += chunk;
+          setReport((prev) => prev + chunk);
+        },
         onError: (err) => {
           toast({
             title: '生成失败',
@@ -155,11 +195,66 @@ export default function ReportPage() {
             variant: 'destructive',
           });
         },
-        onDone: () => setStreaming(false),
+        onDone: () => {
+          setStreaming(false);
+          // Archive completed reports (skip aborted / empty ones).
+          if (!controller.signal.aborted && acc.trim()) {
+            void saveReport({
+              period,
+              year,
+              ...(period === 'monthly' ? { month } : {}),
+              content: acc,
+            })
+              .then(refreshHistory)
+              .catch(() => {
+                /* saving is best-effort; the report is still shown locally */
+              });
+          }
+        },
       },
       controller.signal,
     );
   };
+
+  const handleLoad = async (item: AiReportSummary) => {
+    abortRef.current?.abort();
+    setLoadingId(item.id);
+    try {
+      const full = await getReport(item.id);
+      setPeriod(full.period);
+      setYear(full.year);
+      if (full.period === 'monthly' && full.month) setMonth(full.month);
+      setReport(full.content);
+      setHasRun(true);
+      setShowHistory(false);
+    } catch (err) {
+      toast({
+        title: '加载失败',
+        description: err instanceof Error ? err.message : '无法读取报告',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoadingId(null);
+    }
+  };
+
+  const handleDeleteHistory = async (id: string) => {
+    try {
+      await deleteReport(id);
+      setHistory((prev) => prev.filter((r) => r.id !== id));
+    } catch (err) {
+      toast({
+        title: '删除失败',
+        description: err instanceof Error ? err.message : '请稍后重试',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const formatHistoryLabel = (item: AiReportSummary) =>
+    item.period === 'monthly'
+      ? `${item.year} 年 ${item.month ?? ''} 月`
+      : `${item.year} 年度`;
 
   const handleExport = async () => {
     const node = captureRef.current;
@@ -295,8 +390,63 @@ export default function ReportPage() {
             )}
             导出长图
           </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => setShowHistory((v) => !v)}
+            className={cn(showHistory && 'bg-primary/10 text-primary')}
+            title="历史报告"
+          >
+            <History className="size-4" />
+          </Button>
         </div>
       </div>
+
+      {/* History panel */}
+      {showHistory && (
+        <div className="glass flex flex-col gap-1 rounded-xl p-3">
+          <p className="px-1 pb-1 text-xs font-medium text-muted-foreground">
+            历史报告 ({history.length})
+          </p>
+          {history.length === 0 ? (
+            <p className="px-1 py-4 text-center text-sm text-muted-foreground">
+              暂无已保存的报告
+            </p>
+          ) : (
+            history.map((item) => (
+              <div
+                key={item.id}
+                className="flex items-center gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-muted/60"
+              >
+                <button
+                  type="button"
+                  onClick={() => handleLoad(item)}
+                  disabled={loadingId === item.id}
+                  className="flex flex-1 items-center gap-2 text-left text-sm"
+                >
+                  {loadingId === item.id ? (
+                    <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
+                  ) : (
+                    <FileText className="size-4 shrink-0 text-primary/70" />
+                  )}
+                  <span className="font-medium">{formatHistoryLabel(item)}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {item.period === 'monthly' ? '月度' : '年度'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteHistory(item.id)}
+                  className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                  title="删除"
+                >
+                  <Trash2 className="size-4" />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
 
       {/* Report body */}
       {!hasRun ? (
