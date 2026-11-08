@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use chrono::{Datelike, NaiveTime, Utc};
 use rust_decimal::Decimal;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::errors::AppError;
@@ -19,15 +19,25 @@ pub async fn create_transaction(
     req: CreateTransactionRequest,
 ) -> Result<Transaction, AppError> {
     let mut tx = pool.begin().await?;
-    let txn_id = Uuid::new_v4();
-    let now = Utc::now();
+    let transaction = insert_transaction(&mut tx, user_id, family_id, &req).await?;
+    tx.commit().await?;
+    Ok(transaction)
+}
 
+/// Insert a transaction plus its member shares on an existing connection, so
+/// callers can bundle it with other writes in one DB transaction.
+pub(crate) async fn insert_transaction(
+    conn: &mut PgConnection,
+    user_id: Uuid,
+    family_id: Uuid,
+    req: &CreateTransactionRequest,
+) -> Result<Transaction, AppError> {
     let transaction = sqlx::query_as::<_, Transaction>(
         "INSERT INTO transactions (id, user_id, family_id, category_id, subcategory_id, type, amount, currency, date, time, location, note, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          RETURNING *",
     )
-    .bind(txn_id)
+    .bind(Uuid::new_v4())
     .bind(user_id)
     .bind(family_id)
     .bind(req.category_id)
@@ -39,44 +49,64 @@ pub async fn create_transaction(
     .bind(req.time)
     .bind(&req.location)
     .bind(&req.note)
-    .bind(now)
-    .fetch_one(&mut *tx)
+    .bind(Utc::now())
+    .fetch_one(&mut *conn)
     .await?;
 
     if let Some(members) = &req.members {
-        if !members.is_empty() {
-            let member_count = Decimal::from(members.len() as i64);
-            let share = req.amount / member_count;
-
-            for member_name in members {
-                sqlx::query(
-                    "INSERT INTO transaction_members (id, transaction_id, member_name, share_amount)
-                     VALUES ($1, $2, $3, $4)",
-                )
-                .bind(Uuid::new_v4())
-                .bind(txn_id)
-                .bind(member_name)
-                .bind(share)
-                .execute(&mut *tx)
-                .await?;
-
-                sqlx::query(
-                    "INSERT INTO members (id, user_id, family_id, name)
-                     VALUES ($1, $2, $3, $4)
-                     ON CONFLICT (family_id, name) DO NOTHING",
-                )
-                .bind(Uuid::new_v4())
-                .bind(user_id)
-                .bind(family_id)
-                .bind(member_name)
-                .execute(&mut *tx)
-                .await?;
-            }
-        }
+        write_members(conn, user_id, family_id, transaction.id, req.amount, members).await?;
     }
 
-    tx.commit().await?;
     Ok(transaction)
+}
+
+/// Split `amount` evenly across `members` and register each name in the
+/// family's member list. Blank and duplicate names are ignored.
+async fn write_members(
+    conn: &mut PgConnection,
+    user_id: Uuid,
+    family_id: Uuid,
+    txn_id: Uuid,
+    amount: Decimal,
+    members: &[String],
+) -> Result<(), AppError> {
+    let mut names: Vec<&str> = Vec::new();
+    for name in members.iter().map(|m| m.trim()) {
+        if !name.is_empty() && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    if names.is_empty() {
+        return Ok(());
+    }
+
+    let share = amount / Decimal::from(names.len() as i64);
+    for member_name in names {
+        sqlx::query(
+            "INSERT INTO transaction_members (id, transaction_id, member_name, share_amount)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(txn_id)
+        .bind(member_name)
+        .bind(share)
+        .execute(&mut *conn)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO members (id, user_id, family_id, name)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (family_id, name) DO NOTHING",
+        )
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .bind(family_id)
+        .bind(member_name)
+        .execute(&mut *conn)
+        .await?;
+    }
+
+    Ok(())
 }
 
 pub async fn get_transaction(
@@ -193,16 +223,41 @@ pub async fn update_transaction(
     req: CreateTransactionRequest,
 ) -> Result<Transaction, AppError> {
     let mut tx = pool.begin().await?;
+    let transaction = update_transaction_in(&mut tx, user_id, family_id, txn_id, &req).await?;
 
-    sqlx::query_as::<_, Transaction>(
-        "SELECT * FROM transactions WHERE id = $1 AND family_id = $2",
+    // Keep a 人情 record booked as this entry in step with it.
+    let sole_member = match req.members.as_deref() {
+        Some([only]) => Some(only.trim()).filter(|m| !m.is_empty()),
+        _ => None,
+    };
+    sqlx::query(
+        "UPDATE social_gifts
+         SET amount = $1, date = $2,
+             type = CASE WHEN $3 = 'income' THEN 'receive' ELSE 'give' END,
+             person_name = COALESCE($4, person_name)
+         WHERE transaction_id = $5",
     )
+    .bind(transaction.amount)
+    .bind(transaction.date)
+    .bind(&transaction.r#type)
+    .bind(sole_member)
     .bind(txn_id)
-    .bind(family_id)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Transaction not found".to_string()))?;
+    .execute(&mut *tx)
+    .await?;
 
+    tx.commit().await?;
+    Ok(transaction)
+}
+
+/// Overwrite a transaction and replace its member shares on an existing
+/// connection. `req.members = None` clears the members.
+pub(crate) async fn update_transaction_in(
+    conn: &mut PgConnection,
+    user_id: Uuid,
+    family_id: Uuid,
+    txn_id: Uuid,
+    req: &CreateTransactionRequest,
+) -> Result<Transaction, AppError> {
     let transaction = sqlx::query_as::<_, Transaction>(
         "UPDATE transactions
          SET category_id = $1, subcategory_id = $2, type = $3, amount = $4, currency = $5,
@@ -221,47 +276,19 @@ pub async fn update_transaction(
     .bind(&req.note)
     .bind(txn_id)
     .bind(family_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Transaction not found".to_string()))?;
 
     sqlx::query("DELETE FROM transaction_members WHERE transaction_id = $1")
         .bind(txn_id)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
 
     if let Some(members) = &req.members {
-        if !members.is_empty() {
-            let member_count = Decimal::from(members.len() as i64);
-            let share = req.amount / member_count;
-
-            for member_name in members {
-                sqlx::query(
-                    "INSERT INTO transaction_members (id, transaction_id, member_name, share_amount)
-                     VALUES ($1, $2, $3, $4)",
-                )
-                .bind(Uuid::new_v4())
-                .bind(txn_id)
-                .bind(member_name)
-                .bind(share)
-                .execute(&mut *tx)
-                .await?;
-
-                sqlx::query(
-                    "INSERT INTO members (id, user_id, family_id, name)
-                     VALUES ($1, $2, $3, $4)
-                     ON CONFLICT (family_id, name) DO NOTHING",
-                )
-                .bind(Uuid::new_v4())
-                .bind(user_id)
-                .bind(family_id)
-                .bind(member_name)
-                .execute(&mut *tx)
-                .await?;
-            }
-        }
+        write_members(conn, user_id, family_id, txn_id, req.amount, members).await?;
     }
 
-    tx.commit().await?;
     Ok(transaction)
 }
 

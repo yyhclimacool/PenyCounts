@@ -97,6 +97,8 @@ export interface SocialGift {
   date: string;
   note: string | null;
   created_at: string;
+  /** Ledger entry this gift was booked as (records created via the AI). */
+  transaction_id: string | null;
 }
 
 export interface LlmConfig {

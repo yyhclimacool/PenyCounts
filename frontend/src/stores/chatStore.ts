@@ -12,6 +12,15 @@ export interface ChatMessageUI extends ChatMessage {
   isStreaming?: boolean;
 }
 
+const TOOL_ACTION_LABELS: Record<string, string> = {
+  create_transaction: '记账',
+  update_transaction: '修改账单',
+  delete_transaction: '删除账单',
+  create_social_gift: '记录人情',
+  update_social_gift: '修改人情',
+  delete_social_gift: '删除人情',
+};
+
 interface ChatState {
   messages: ChatMessageUI[];
   isOpen: boolean;
@@ -118,7 +127,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
               return { messages: msgs };
             });
           } else if (data.error) {
-            full += `\n\n记账失败: ${data.error}`;
+            const action = (data.tool && TOOL_ACTION_LABELS[data.tool]) || '操作';
+            full += `\n\n${action}失败: ${data.error}`;
             const content = full;
             set((s) => {
               const msgs = s.messages.slice();

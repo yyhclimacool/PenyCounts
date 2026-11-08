@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod ai_tools;
 pub mod auth;
 pub mod budget;
 pub mod category;

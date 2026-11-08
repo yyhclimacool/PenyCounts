@@ -125,6 +125,8 @@ pub struct SocialGift {
     pub date: NaiveDate,
     pub note: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// Ledger entry this gift was booked as (set when recorded via the AI).
+    pub transaction_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -214,6 +216,10 @@ pub struct CreateSocialGiftRequest {
     pub currency: String,
     pub date: NaiveDate,
     pub note: Option<String>,
+    /// 红包 / 礼金 / 礼物 — picks the ledger subcategory. On update, `None`
+    /// keeps the current one.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -232,6 +238,10 @@ pub struct LlmConfigRequest {
 #[derive(Debug, Deserialize)]
 pub struct ChatRequest {
     pub message: String,
+    /// Client UTC offset in minutes east of UTC (e.g. 480 for UTC+8), so
+    /// "today" and default times follow the user rather than the server.
+    #[serde(default)]
+    pub tz_offset_minutes: Option<i32>,
 }
 
 fn default_report_period() -> String {
@@ -324,6 +334,8 @@ pub struct SocialGiftFilter {
     pub r#type: Option<String>,
     pub person_name: Option<String>,
     pub year: Option<i32>,
+    pub start_date: Option<NaiveDate>,
+    pub end_date: Option<NaiveDate>,
     pub page: Option<u32>,
     pub per_page: Option<u32>,
 }

@@ -33,8 +33,9 @@ RUN touch src/main.rs && cargo build --release --locked
 # =============================================================================
 FROM debian:bookworm-slim AS runtime
 
+# tzdata: "today" (streaks, budgets, AI date defaults) follows the TZ env var.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --system --no-create-home --shell /usr/sbin/nologin penycounts

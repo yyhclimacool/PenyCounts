@@ -13,12 +13,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -41,6 +36,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import * as socialGiftsService from '@/services/socialGifts';
+import type { SocialGiftKind } from '@/services/socialGifts';
 import * as statsService from '@/services/stats';
 import type { SocialGift, SocialSummary } from '@/types';
 import { formatCurrency, formatDate } from '@/utils/format';
@@ -62,6 +58,8 @@ interface FormState {
   currency: string;
   date: string;
   note: string;
+  /** '' while editing means "keep the ledger subcategory as is". */
+  kind: SocialGiftKind | '';
 }
 
 const defaultForm: FormState = {
@@ -73,7 +71,10 @@ const defaultForm: FormState = {
   currency: 'CNY',
   date: dayjs().format('YYYY-MM-DD'),
   note: '',
+  kind: '红包',
 };
+
+const KINDS: SocialGiftKind[] = ['红包', '礼金', '礼物'];
 
 const RELATIONS = ['亲戚', '朋友', '同事', '同学', '邻居', '长辈', '晚辈', '其他'];
 const OCCASIONS = [
@@ -87,6 +88,11 @@ const OCCASIONS = [
   '探病',
   '其他',
 ];
+
+/** Keep a stored value selectable even if it isn't one of the presets. */
+function withCurrent(options: string[], value: string): string[] {
+  return value && !options.includes(value) ? [...options, value] : options;
+}
 
 export default function SocialGiftsPage() {
   const { addToast } = useToast();
@@ -184,6 +190,7 @@ export default function SocialGiftsPage() {
       currency: gift.currency,
       date: gift.date,
       note: gift.note ?? '',
+      kind: '',
     });
     setDialogOpen(true);
   }
@@ -213,6 +220,7 @@ export default function SocialGiftsPage() {
         currency: form.currency,
         date: form.date,
         note: form.note || null,
+        kind: form.kind || null,
       };
 
       if (editingGift) {
@@ -220,7 +228,7 @@ export default function SocialGiftsPage() {
         addToast({ title: '记录已更新' });
       } else {
         await socialGiftsService.create(payload);
-        addToast({ title: '记录已添加' });
+        addToast({ title: '记录已添加，并已记入账单' });
       }
 
       // Remember this date so the next "add" defaults to it.
@@ -231,12 +239,18 @@ export default function SocialGiftsPage() {
       const year = dayjs().year();
       statsService.socialSummary({ year }).then(setSummaryData);
       useDataStore.getState().invalidateSocialGifts();
+      // New gifts and edits to linked ones write the ledger too.
+      if (!editingGift || editingGift.transaction_id) {
+        useDataStore.getState().invalidateTransactions();
+      }
     } catch {
       addToast({ title: '操作失败', variant: 'destructive' });
     } finally {
       setSubmitting(false);
     }
   }
+
+  const deletingGift = gifts.find((g) => g.id === deletingId);
 
   async function handleDelete() {
     if (!deletingId) return;
@@ -249,6 +263,9 @@ export default function SocialGiftsPage() {
       const year = dayjs().year();
       statsService.socialSummary({ year }).then(setSummaryData);
       useDataStore.getState().invalidateSocialGifts();
+      if (deletingGift?.transaction_id) {
+        useDataStore.getState().invalidateTransactions();
+      }
     } catch {
       addToast({ title: '删除失败', variant: 'destructive' });
     }
@@ -402,6 +419,15 @@ export default function SocialGiftsPage() {
                           {gift.relation}
                         </Badge>
                       )}
+                      {!gift.transaction_id && (
+                        <Badge
+                          variant="outline"
+                          className="text-xs shrink-0 text-muted-foreground"
+                          title="早期添加的记录，没有对应账单，不计入人情统计"
+                        >
+                          未记账
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <span>{gift.occasion}</span>
@@ -489,7 +515,11 @@ export default function SocialGiftsPage() {
               {editingGift ? '编辑人情记录' : '添加人情记录'}
             </DialogTitle>
             <DialogDescription>
-              记录人情往来，方便日后查阅
+              {!editingGift
+                ? '会同时记一笔「人情往来 / 人情收入」账单，计入人情统计'
+                : editingGift.transaction_id
+                  ? '修改会同步到对应的账单'
+                  : '这条早期记录没有对应账单，修改只影响人情簿'}
             </DialogDescription>
           </DialogHeader>
 
@@ -546,7 +576,7 @@ export default function SocialGiftsPage() {
                   <SelectValue placeholder="选择关系（可选）" />
                 </SelectTrigger>
                 <SelectContent>
-                  {RELATIONS.map((r) => (
+                  {withCurrent(RELATIONS, form.relation).map((r) => (
                     <SelectItem key={r} value={r}>
                       {r}
                     </SelectItem>
@@ -566,7 +596,7 @@ export default function SocialGiftsPage() {
                   <SelectValue placeholder="选择场合" />
                 </SelectTrigger>
                 <SelectContent>
-                  {OCCASIONS.map((o) => (
+                  {withCurrent(OCCASIONS, form.occasion).map((o) => (
                     <SelectItem key={o} value={o}>
                       {o}
                     </SelectItem>
@@ -574,6 +604,28 @@ export default function SocialGiftsPage() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Kind → ledger subcategory (红包礼金 / 礼物 / 收到红包 / 收到礼金) */}
+            {(!editingGift || editingGift.transaction_id) && (
+              <div>
+                <Label>形式</Label>
+                <Select
+                  value={form.kind}
+                  onValueChange={(v) => updateForm('kind', v as SocialGiftKind)}
+                >
+                  <SelectTrigger className="mt-1.5">
+                    <SelectValue placeholder="保持账单分类不变" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {KINDS.map((k) => (
+                      <SelectItem key={k} value={k}>
+                        {k}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             {/* Amount + Currency */}
             <div className="grid grid-cols-3 gap-3">
@@ -654,7 +706,9 @@ export default function SocialGiftsPage() {
           <DialogHeader>
             <DialogTitle>确认删除</DialogTitle>
             <DialogDescription>
-              此操作不可撤销，确定要删除这条人情记录吗？
+              {deletingGift?.transaction_id
+                ? '此操作不可撤销，对应的账单记录也会一并删除。确定要删除吗？'
+                : '此操作不可撤销，确定要删除这条人情记录吗？'}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

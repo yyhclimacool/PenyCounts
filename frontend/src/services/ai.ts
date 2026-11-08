@@ -179,9 +179,16 @@ export async function streamReport(
   }
 }
 
+export interface ChatToolResult {
+  success: boolean;
+  tool?: string;
+  summary?: string;
+  error?: string;
+}
+
 export interface ChatStreamOptions {
   onDelta?: (chunk: string) => void;
-  onToolResult?: (data: { success: boolean; summary?: string; error?: string }) => void;
+  onToolResult?: (data: ChatToolResult) => void;
   onDone?: () => void;
   onError?: (error: Error) => void;
 }
@@ -207,7 +214,11 @@ export async function chat(
         Accept: 'text/event-stream',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ message }),
+      // The backend resolves "today" / default times in the user's timezone.
+      body: JSON.stringify({
+        message,
+        tz_offset_minutes: -new Date().getTimezoneOffset(),
+      }),
       signal,
     });
   } catch (e) {

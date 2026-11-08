@@ -9,6 +9,8 @@ export interface SocialGiftListFilters {
   per_page?: number;
 }
 
+export type SocialGiftKind = '红包' | '礼金' | '礼物';
+
 export interface CreateSocialGiftPayload {
   type: 'give' | 'receive';
   person_name: string;
@@ -18,6 +20,8 @@ export interface CreateSocialGiftPayload {
   currency: string;
   date: string;
   note?: string | null;
+  /** Picks the ledger subcategory; omitted on update keeps the current one. */
+  kind?: SocialGiftKind | null;
 }
 
 export interface UpdateSocialGiftPayload {
@@ -29,6 +33,7 @@ export interface UpdateSocialGiftPayload {
   currency?: string;
   date?: string;
   note?: string | null;
+  kind?: SocialGiftKind | null;
 }
 
 export async function list(

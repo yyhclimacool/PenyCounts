@@ -42,9 +42,15 @@ pub async fn create_social_gift(
     Json(req): Json<CreateSocialGiftRequest>,
 ) -> Result<(StatusCode, Json<SocialGift>), AppError> {
     tracing::debug!(user_id = %auth.family_id, ?req, "create_social_gift: received request");
-    let gift =
-        services::social_gift::create_social_gift(&state.pool, auth.user_id, auth.family_id, req).await?;
-    tracing::info!(gift_id = %gift.id, person = %gift.person_name, amount = %gift.amount, "create_social_gift: created successfully");
+    let (gift, _) = services::social_gift::create_social_gift(
+        &state.pool,
+        auth.user_id,
+        auth.family_id,
+        req,
+        chrono::Local::now().time(),
+    )
+    .await?;
+    tracing::info!(gift_id = %gift.id, person = %gift.person_name, amount = %gift.amount, txn_id = ?gift.transaction_id, "create_social_gift: created successfully");
     Ok((StatusCode::CREATED, Json(gift)))
 }
 

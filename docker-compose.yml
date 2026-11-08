@@ -31,6 +31,7 @@ services:
     environment:
       # Override host for Docker network (postgres service hostname)
       DATABASE_URL: postgres://${POSTGRES_USER:-penycounts}:${POSTGRES_PASSWORD:-penycounts}@postgres:5432/${POSTGRES_DB:-penycounts}
+      TZ: ${TZ:-Asia/Shanghai}
     depends_on:
       postgres:
         condition: service_healthy

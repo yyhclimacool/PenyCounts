@@ -111,8 +111,14 @@ pub async fn chat(
 {
     tracing::debug!(user_id = %auth.family_id, message_len = req.message.len(), "chat: received request");
     tracing::debug!(user_id = %auth.family_id, message = %req.message, "chat: message content");
-    let stream =
-        services::ai::chat_stream(&state.pool, auth.user_id, auth.family_id, req.message).await?;
+    let stream = services::ai::chat_stream(
+        &state.pool,
+        auth.user_id,
+        auth.family_id,
+        req.message,
+        req.tz_offset_minutes,
+    )
+    .await?;
     tracing::debug!(user_id = %auth.family_id, "chat: SSE stream created");
     // Reasoning models can think for a long time without emitting any visible
     // content. Send a periodic keep-alive comment so reverse proxies (nginx

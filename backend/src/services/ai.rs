@@ -1,19 +1,22 @@
+use std::collections::{BTreeMap, HashSet};
+use std::convert::Infallible;
+use std::time::Duration;
+
 use axum::response::sse::Event;
-use chrono::{Datelike, Local, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, Datelike, FixedOffset, Local, Utc};
 use futures::StreamExt;
 use rust_decimal::Decimal;
+use serde_json::{json, Value};
 use sqlx::PgPool;
-use std::convert::Infallible;
-use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::models::{
-    AiReport, AiReportSummary, Category, ChatMessage, CreateSocialGiftRequest,
-    CreateTransactionRequest, LlmConfig, LlmConfigRequest, Member, OcrAvailability, OcrResult,
-    SaveReportRequest, SocialGiftFilter, Subcategory,
+    AiReport, AiReportSummary, Category, ChatMessage, LlmConfig, LlmConfigRequest, Member,
+    OcrAvailability, OcrResult, SaveReportRequest, Subcategory,
 };
-use crate::services::{social_gift, stats, transaction};
+use crate::services::ai_tools::{self, ToolContext, ToolKind};
+use crate::services::{social_gift, stats};
 
 // ── LLM config CRUD ──────────────────────────────────────────────────
 
@@ -217,28 +220,77 @@ pub async fn test_llm_connection(
 
 // ── Chat with streaming ──────────────────────────────────────────────
 
+/// History rows replayed to the model. A tool turn takes several rows, so this
+/// covers roughly the last handful of exchanges.
+const HISTORY_WINDOW: i64 = 40;
+/// Old query dumps add tokens, not signal; replayed tool results are clipped.
+const HISTORY_TOOL_CHARS: usize = 1500;
+const MAX_ITERATIONS: usize = 10;
+
+const DUPLICATE_READ_NOTE: &str =
+    "（已用相同条件查询过，结果见上文。请不要再调用工具，直接根据上面的数据用中文回答用户的问题。）";
+const DUPLICATE_WRITE_NOTE: &str =
+    "（这个操作在本轮对话中已经成功执行过，为避免重复记账已跳过。请不要再调用工具，直接用中文简短回复用户。）";
+
 pub async fn get_chat_history(
     pool: &PgPool,
     family_id: Uuid,
 ) -> Result<Vec<ChatMessage>, AppError> {
     tracing::debug!(family_id = %family_id, "svc::get_chat_history: querying");
-    // Only return user-facing prose. Internal tool-call rows (role='tool' and
-    // assistant turns carrying only tool_calls) are persisted for AI context but
-    // must not surface in the chat UI.
-    let messages = sqlx::query_as::<_, ChatMessage>(
-        "SELECT * FROM chat_messages
-         WHERE family_id = $1
-           AND role IN ('user', 'assistant')
-           AND tool_calls IS NULL
-           AND content <> ''
-         ORDER BY created_at ASC",
+    let rows = sqlx::query_as::<_, ChatMessage>(
+        "SELECT * FROM chat_messages WHERE family_id = $1 ORDER BY created_at ASC",
     )
     .bind(family_id)
     .fetch_all(pool)
     .await?;
+    let messages = fold_for_display(rows);
     tracing::debug!(count = messages.len(), "svc::get_chat_history: done");
 
     Ok(messages)
+}
+
+/// Collapse each agent turn (prose, tool calls, tool results) into a single
+/// assistant bubble, matching what the client shows while streaming. Of the
+/// tool rows only write confirmations ("✅ …") are user-facing.
+fn fold_for_display(rows: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    let mut out: Vec<ChatMessage> = Vec::new();
+    for row in rows {
+        let piece = match row.role.as_str() {
+            "user" => {
+                if !row.content.trim().is_empty() {
+                    out.push(row);
+                }
+                continue;
+            }
+            "assistant" => row.content.trim().to_string(),
+            "tool" if row.content.trim_start().starts_with('✅') => row
+                .content
+                .lines()
+                .filter(|l| !l.starts_with(ai_tools::RECORD_ID_PREFIX))
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_string(),
+            _ => continue,
+        };
+        if piece.is_empty() {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if last.role == "assistant" => {
+                last.content.push_str("\n\n");
+                last.content.push_str(&piece);
+            }
+            _ => out.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: piece,
+                tool_calls: None,
+                tool_call_id: None,
+                ..row
+            }),
+        }
+    }
+    out
 }
 
 pub async fn clear_chat_history(pool: &PgPool, family_id: Uuid) -> Result<(), AppError> {
@@ -251,11 +303,344 @@ pub async fn clear_chat_history(pool: &PgPool, family_id: Uuid) -> Result<(), Ap
     Ok(())
 }
 
+/// "Now" in the user's timezone. Falls back to the server's local time when the
+/// client did not send a (sane) offset.
+fn user_now(tz_offset_minutes: Option<i32>) -> DateTime<FixedOffset> {
+    tz_offset_minutes
+        .filter(|m| m.abs() <= 14 * 60)
+        .and_then(|m| FixedOffset::east_opt(m * 60))
+        .map(|tz| Utc::now().with_timezone(&tz))
+        .unwrap_or_else(|| Local::now().fixed_offset())
+}
+
+fn build_system_prompt(now: &DateTime<FixedOffset>, categories: &str, members: &str) -> String {
+    const WEEKDAYS: [&str; 7] = ["一", "二", "三", "四", "五", "六", "日"];
+    let today = now.date_naive();
+    let weekday = WEEKDAYS[today.weekday().num_days_from_monday() as usize];
+    let yesterday = today.pred_opt().unwrap_or(today);
+    let month_start = today.with_day(1).unwrap_or(today);
+    let one_month_ago = today - chrono::Duration::days(30);
+    let year = today.year();
+    let occasions = social_gift::OCCASIONS.join("、");
+    let relations = social_gift::RELATIONS.join("、");
+
+    format!(
+        "你是 PenyCounts 家庭记账应用的 AI 助手，可以帮用户记账、查账、改账、删账、做统计分析，以及记录和查询人情往来。\n\n\
+         当前时间: {now} 星期{weekday}\n\n\
+         ## 可用分类（含子分类）:\n{categories}\n\n\
+         ## 已有人员:\n{members}\n\n\
+         ## 工具选择\n\
+         1. 普通收支 → create_transaction。一次描述多笔时，每笔分别调用一次（可在同一轮并行发起），全部完成后用列表汇总\n\
+         2. **人情往来**（给某人或收到某人的红包、礼金、随份子、压岁钱、见面礼、送礼物等，有明确的对方）→ create_social_gift。它会自动记一笔「人情往来/人情收入」账单（对方记为人员）并登记到人情簿，**不要再为同一笔调用 create_transaction**。没有具体对方的（如慈善捐款、请客吃饭）按普通收支记\n\
+         3. 查账 → query_transactions；查人情 → query_social_gifts（包含人情分类下的全部账单）\n\
+         4. 改/删普通账单 → 先 query_transactions 拿到 ID，再 update_transaction / delete_transaction\n\
+         5. 改/删人情 → 先 query_social_gifts 拿到 ID，再 update_social_gift / delete_social_gift（账单会同步）\n\
+         6. 刚记完的记录，工具结果里带有「记录ID」，用户紧接着要修改或删除时可直接使用，不必再查\n\
+         7. 趋势、占比、人员分摊 → get_statistics\n\n\
+         ## 记账规则\n\
+         - type: income 或 expense，按语义判断\n\
+         - category_name 必须从上面的分类中选，且分类类型要与 type 一致；subcategory_name 只能选该分类名下列出的子分类\n\
+         - date: YYYY-MM-DD。「今天」= {today}，「昨天」= {yesterday}；没说日期默认今天；用户给了具体时刻（如 10:28）就填 time\n\
+         - members: 涉及的人员（付款人、使用人等），只填姓名\n\
+         - 分类之外的细节（商家、物品、地点、谁买的等）写进 note\n\
+         - 缺少金额或无法判断收支方向时先追问，不要瞎猜\n\n\
+         ## 人情往来规则\n\
+         - type: give=我方送出（随礼、发红包、送礼物），receive=我方收到\n\
+         - person_name 填**对方**姓名（收礼人或送礼人），不是我方经手人；我方经手人等其他信息写进 note\n\
+         - occasion 只能是: {occasions}（结婚/喜酒→婚礼，拜年/压岁钱/春节→节日，看望病人→探病，搬家→乔迁，说不清→其他）\n\
+         - kind: 红包 / 礼金 / 礼物（送的是实物时用礼物）\n\
+         - relation（可选）: {relations}\n\
+         - 示例：\n\
+           - 「送张三结婚红包 500」→ type=give, person_name=张三, occasion=婚礼, kind=红包, amount=500\n\
+           - 「牛牛生日，陈学华给了 300 红包」→ type=receive, person_name=陈学华, occasion=生日, kind=红包, note=牛牛生日红包\n\
+           - 「黄丹丹买补品送给刘长方 164.98，算人情」→ type=give, person_name=刘长方, occasion=其他, kind=礼物, note=黄丹丹买的补品\n\n\
+         ## 行为准则\n\
+         1. 需要读写数据就直接调用工具，不要在回复里输出 JSON，也不要假装已经完成。「✅ 记账成功」之类的结果由系统在工具成功后自动展示，你不要编造或复述，只需简短确认\n\
+         2. 工具返回 Error 时，按提示修正参数后重试一次；仍失败就如实告诉用户原因\n\
+         3. 修改或删除前，若不确定是哪条记录先查询；匹配到多条时列出来让用户选\n\
+         4. 严格遵守用户指定的时间范围：「4月份」只查 {year}-04-01 至 {year}-04-30；「本月」= {month_start} 至 {today}；「最近一个月」= {one_month_ago} 至 {today}。没有数据就如实说「该时间段没有记录」，不要自行扩大范围\n\
+         5. 问「最大/最贵的 N 笔」：query_transactions 设 sort_by=amount_desc、limit=N，直接用返回结果作答\n\
+         6. 工具结果已经能回答问题时立即作答，不要换范围重复查询\n\
+         7. 闲聊或一般问题直接回答\n\
+         8. 回复用规范 Markdown：列举时每条独占一行（「1. 内容」），金额等要点可加粗",
+        now = now.format("%Y-%m-%d %H:%M"),
+    )
+}
+
+fn clip(s: &str, max_chars: usize) -> String {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => format!("{}…（已截断）", &s[..idx]),
+        None => s.to_string(),
+    }
+}
+
+/// Rebuild an OpenAI-format history including tool calls and tool results. A
+/// text-only history (assistant prose with no tool context) taught weak models
+/// that "recording" just means replying with a confirmation sentence — so they
+/// stopped calling the tools. Replaying the real chain keeps them on track.
+fn replay_history(rows_newest_first: Vec<ChatMessage>) -> Vec<Value> {
+    let mut msgs: Vec<Value> = Vec::new();
+    for msg in rows_newest_first.into_iter().rev() {
+        match msg.role.as_str() {
+            "tool" => msgs.push(json!({
+                "role": "tool",
+                "tool_call_id": msg.tool_call_id.unwrap_or_default(),
+                "content": clip(&msg.content, HISTORY_TOOL_CHARS),
+            })),
+            "assistant" => {
+                // Strip any legacy "✅ 记账成功！…" echo blocks from older rows.
+                let content = strip_tool_echoes(&msg.content);
+                let tool_calls = msg
+                    .tool_calls
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                    .filter(|v| v.as_array().is_some_and(|a| !a.is_empty()));
+                if content.is_empty() && tool_calls.is_none() {
+                    continue;
+                }
+                let mut m = json!({ "role": "assistant" });
+                if !content.is_empty() {
+                    m["content"] = Value::String(content);
+                }
+                if let Some(tc) = tool_calls {
+                    m["tool_calls"] = tc;
+                }
+                msgs.push(m);
+            }
+            _ => {
+                if !msg.content.trim().is_empty() {
+                    msgs.push(json!({ "role": "user", "content": msg.content }));
+                }
+            }
+        }
+    }
+    sanitize_tool_pairs(msgs)
+}
+
+/// Enforce the API invariant: an assistant `tool_calls` message must be
+/// followed by a tool message for each call id, and tool messages may only
+/// answer such a call. The history window or an interrupted stream can break
+/// either side; the broken parts are dropped instead of failing the request.
+fn sanitize_tool_pairs(msgs: Vec<Value>) -> Vec<Value> {
+    let mut out = Vec::with_capacity(msgs.len());
+    let mut i = 0;
+    while i < msgs.len() {
+        let msg = &msgs[i];
+        if msg["role"] == "tool" {
+            i += 1;
+            continue;
+        }
+        let Some(calls) = msg["tool_calls"].as_array() else {
+            out.push(msg.clone());
+            i += 1;
+            continue;
+        };
+
+        let mut end = i + 1;
+        while end < msgs.len() && msgs[end]["role"] == "tool" {
+            end += 1;
+        }
+        let results = &msgs[i + 1..end];
+        let ids: HashSet<&str> = calls.iter().filter_map(|c| c["id"].as_str()).collect();
+        let answered: HashSet<&str> =
+            results.iter().filter_map(|t| t["tool_call_id"].as_str()).collect();
+
+        if !ids.is_empty() && ids.len() == calls.len() && ids.is_subset(&answered) {
+            out.push(msg.clone());
+            out.extend(
+                results
+                    .iter()
+                    .filter(|t| t["tool_call_id"].as_str().is_some_and(|id| ids.contains(id)))
+                    .cloned(),
+            );
+        } else if let Some(text) = msg["content"].as_str().filter(|c| !c.is_empty()) {
+            out.push(json!({ "role": "assistant", "content": text }));
+        }
+        i = end;
+    }
+    out
+}
+
+#[derive(Default)]
+struct PendingToolCall {
+    id: String,
+    name: String,
+    args: String,
+}
+
+impl PendingToolCall {
+    /// Name plus canonicalized arguments, used to spot repeated calls.
+    fn signature(&self) -> String {
+        let args = serde_json::from_str::<Value>(&self.args)
+            .map(|v| v.to_string())
+            .unwrap_or_else(|_| self.args.trim().to_string());
+        format!("{}|{}", self.name, args)
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "id": self.id,
+            "type": "function",
+            "function": { "name": self.name, "arguments": self.args },
+        })
+    }
+}
+
+/// Slot a streamed tool-call fragment belongs to. Some providers omit `index`
+/// and send each call whole; then a known id continues its call, and a fragment
+/// carrying a function name starts a new one.
+fn tool_call_slot(pending: &BTreeMap<usize, PendingToolCall>, call: &Value) -> usize {
+    if let Some(i) = call["index"].as_u64() {
+        return i as usize;
+    }
+    if let Some(id) = call["id"].as_str().filter(|s| !s.is_empty()) {
+        if let Some((&slot, _)) = pending.iter().find(|(_, c)| c.id == id) {
+            return slot;
+        }
+    }
+    let starts_new = call["function"]["name"].as_str().is_some_and(|n| !n.is_empty());
+    match pending.last_key_value() {
+        Some((&last, _)) if starts_new => last + 1,
+        Some((&last, _)) => last,
+        None => 0,
+    }
+}
+
+/// Merge streamed tool-call fragments into complete calls.
+fn accumulate_tool_calls(pending: &mut BTreeMap<usize, PendingToolCall>, calls: &[Value]) {
+    for call in calls {
+        let slot = tool_call_slot(pending, call);
+        let entry = pending.entry(slot).or_default();
+        if let Some(id) = call["id"].as_str().filter(|s| !s.is_empty()) {
+            entry.id = id.to_string();
+        }
+        if let Some(name) = call["function"]["name"].as_str().filter(|s| !s.is_empty()) {
+            // Most providers send the name once; some repeat it on every chunk.
+            if entry.name != name {
+                entry.name.push_str(name);
+            }
+        }
+        match &call["function"]["arguments"] {
+            Value::String(s) => entry.args.push_str(s),
+            Value::Null => {}
+            // Ollama-style providers send the arguments as an object.
+            other => entry.args.push_str(&other.to_string()),
+        }
+    }
+}
+
+fn finalize_tool_calls(pending: BTreeMap<usize, PendingToolCall>) -> Vec<PendingToolCall> {
+    pending
+        .into_values()
+        .filter(|c| !c.name.is_empty())
+        .map(|mut c| {
+            if c.id.is_empty() {
+                c.id = format!("call_{}", Uuid::new_v4().simple());
+            }
+            if c.args.trim().is_empty() {
+                c.args = "{}".to_string();
+            }
+            c
+        })
+        .collect()
+}
+
+struct PersistRow {
+    role: &'static str,
+    content: String,
+    tool_calls: Option<String>,
+    tool_call_id: Option<String>,
+}
+
+/// Save chat rows in the background. Rows are stamped `base + seq` ms up front
+/// so they keep their order even though each batch lands independently — and
+/// they still land if the client disconnects mid-stream.
+fn spawn_persist(ctx: &ToolContext, base: DateTime<Utc>, seq: &mut i64, rows: Vec<PersistRow>) {
+    let first = *seq;
+    *seq += rows.len() as i64;
+    let pool = ctx.pool.clone();
+    let (user_id, family_id) = (ctx.user_id, ctx.family_id);
+    tokio::spawn(async move {
+        for (i, row) in rows.into_iter().enumerate() {
+            let created_at = base + chrono::Duration::milliseconds(first + i as i64);
+            let result = sqlx::query(
+                "INSERT INTO chat_messages
+                    (id, user_id, family_id, role, content, tool_calls, tool_call_id, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(Uuid::new_v4())
+            .bind(user_id)
+            .bind(family_id)
+            .bind(row.role)
+            .bind(row.content)
+            .bind(row.tool_calls)
+            .bind(row.tool_call_id)
+            .bind(created_at)
+            .execute(&pool)
+            .await;
+            if let Err(e) = result {
+                tracing::warn!(error = %e, "agent loop: failed to persist chat row");
+            }
+        }
+    });
+}
+
+/// HTTP client for streaming LLM calls.
+fn llm_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        // Per-read: reasoning models may pause for a while between tokens.
+        .read_timeout(Duration::from_secs(180))
+        .build()
+}
+
+fn describe_request_error(e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        "请求超时，模型长时间没有响应".to_string()
+    } else if e.is_connect() {
+        "无法连接到模型服务，请检查 API 地址".to_string()
+    } else {
+        e.to_string()
+    }
+}
+
+/// Pop complete lines off `buf`. Lines are decoded only once whole, so a
+/// multi-byte UTF-8 character split across network chunks stays intact.
+fn take_lines(buf: &mut Vec<u8>) -> Vec<String> {
+    let mut lines = Vec::new();
+    while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+        let line: Vec<u8> = buf.drain(..=pos).collect();
+        lines.push(String::from_utf8_lossy(&line).trim().to_string());
+    }
+    lines
+}
+
+/// The final line once the body ends without a trailing newline.
+fn take_rest(buf: &mut Vec<u8>) -> Vec<String> {
+    let rest = String::from_utf8_lossy(&std::mem::take(buf)).trim().to_string();
+    if rest.is_empty() { Vec::new() } else { vec![rest] }
+}
+
+fn sse_data(line: &str) -> Option<&str> {
+    line.strip_prefix("data:").map(str::trim_start)
+}
+
+/// Providers sometimes report failures inside the stream as `{"error": …}`.
+fn provider_error(chunk: &Value) -> Option<String> {
+    let err = chunk.get("error").filter(|e| !e.is_null())?;
+    Some(
+        err.get("message")
+            .and_then(Value::as_str)
+            .map_or_else(|| err.to_string(), String::from),
+    )
+}
+
 pub async fn chat_stream(
     pool: &PgPool,
     user_id: Uuid,
     family_id: Uuid,
     message: String,
+    tz_offset_minutes: Option<i32>,
 ) -> Result<impl futures::Stream<Item = Result<Event, Infallible>>, AppError> {
     tracing::debug!(family_id = %family_id, message_len = message.len(), "svc::chat_stream: starting");
 
@@ -281,776 +666,265 @@ pub async fn chat_stream(
     .execute(pool)
     .await?;
 
-    let categories = sqlx::query_as::<_, Category>(
-        "SELECT * FROM categories WHERE user_id IS NULL OR family_id = $1 ORDER BY type, sort_order",
-    )
-    .bind(family_id)
-    .fetch_all(pool)
-    .await?;
-
-    let subcategories = sqlx::query_as::<_, Subcategory>(
-        "SELECT s.* FROM subcategories s
-         JOIN categories c ON s.category_id = c.id
-         WHERE c.user_id IS NULL OR c.family_id = $1
-         ORDER BY s.sort_order",
-    )
-    .bind(family_id)
-    .fetch_all(pool)
-    .await?;
-
+    let now = user_now(tz_offset_minutes);
+    let tree = ai_tools::CategoryTree::load(pool, family_id).await?;
     let members = sqlx::query_as::<_, Member>(
         "SELECT * FROM members WHERE family_id = $1 ORDER BY name",
     )
     .bind(family_id)
     .fetch_all(pool)
     .await?;
-
-    let mut category_list = String::new();
-    for cat in &categories {
-        category_list.push_str(&format!("- {} ({})\n", cat.name, cat.r#type));
-        let subs: Vec<&Subcategory> = subcategories
-            .iter()
-            .filter(|s| s.category_id == cat.id)
-            .collect();
-        for sub in subs {
-            category_list.push_str(&format!("  - {}\n", sub.name));
-        }
-    }
-
-    let member_list: String = if members.is_empty() {
+    let member_list = if members.is_empty() {
         "暂无".to_string()
     } else {
         members.iter().map(|m| m.name.as_str()).collect::<Vec<_>>().join("、")
     };
-
-    let now = Local::now();
-    let system_prompt = format!(
-        "你是 PenyCounts 家庭记账应用的 AI 助手。你可以帮用户记账、查账、删账、改账、查看统计、记录人情往来。\n\n\
-         当前时间: {now}\n\n\
-         ## 可用分类（含子分类）:\n{category_list}\n\
-         ## 已有家庭成员:\n{member_list}\n\n\
-         ## 你的能力:\n\
-         1. **记账**: 用户描述收支时，调用 create_transaction\n\
-         2. **查账**: 用户查询账单时，调用 query_transactions\n\
-         3. **删账**: 用户要删除记录时，先用 query_transactions 找到对应记录，再调用 delete_transaction\n\
-         4. **改账**: 用户要修改记录时，先查找，再调用 update_transaction\n\
-         5. **统计**: 用户问月度趋势、分类占比、成员消费等，调用 get_statistics\n\
-         6. **人情往来**: 用户记录红包、礼金等，调用 create_social_gift\n\
-         7. **查询人情**: 用户查询人情来往记录，调用 query_social_gifts\n\n\
-         ## 记账规则:\n\
-         - **批量记账**: 用户一次描述多笔时（如「打车20，买菜50，工资到账8000」），把每一笔拆开，为每一笔分别调用一次 create_transaction（可在同一轮发起多个调用），全部记完后用列表汇总确认\n\
-         - **type**: income 或 expense，根据语义判断\n\
-         - **category_name**: 从可用分类中选择最匹配的\n\
-         - **subcategory_name**: 只能从上面「可用分类（含子分类）」中、所选 category_name 名下列出的子分类里挑选，不要填其它一级分类下的子分类\n\
-         - **date**: 格式 YYYY-MM-DD。「今天」= {today}，「昨天」= 前一天\n\
-         - 如果缺少 type 或 amount，追问用户\n\
-         - 如果缺少 date，默认今天 ({today})\n\n\
-         ## 人情往来规则:\n\
-         - type 为 given（送出）或 received（收到）\n\
-         - occasion 为事由（如 结婚、生日、满月 等）\n\
-         - 「送张三结婚红包」→ type=given, person_name=张三, occasion=结婚\n\
-         - 「收到李四的生日礼金」→ type=received, person_name=李四, occasion=生日\n\n\
-         ## 行为准则:\n\
-         1. 不要在回复中输出 JSON，直接调用工具；记账/改账/删账/记人情必须真正调用对应工具完成。绝不要自己编造或复述「✅ 记账成功」「✅ 人情记录成功」「✅ 已更新」「✅ 已删除」之类的结果文本——这些只由系统在工具执行成功后返回，你的文字回复只做简短的中文确认（如「已为您记录…」）\n\
-         2. 如果用户只是闲聊或问问题，正常回答\n\
-         3. 你可以在一次对话中连续调用多个工具（如先查后删）\n\
-         4. 删除和修改操作前，如果不确定是哪条记录，先查询确认\n\
-         5. 查询时间范围：「最近一个月」从 {one_month_ago} 到 {today}，「本月」从本月1号到今天\n\
-         6. 成功操作后用简洁格式确认结果\n\
-         7. **严格遵守用户指定的时间范围**：用户问「4月份」就只查 2026-04-01 至 2026-04-30，绝不要自行扩大到全年或其它区间。即使该范围数据较少或为空，也只基于该范围作答（没有就如实说「该时间段没有记录」）\n\
-         8. 问「最大/最贵/最高的 N 笔」时，调用 query_transactions 并设置 sort_by=amount_desc、limit=N，直接用返回的前 N 条作答，不要再调别的工具\n\
-         9. **一旦某次工具结果已经能回答用户的问题，就立即用中文文字作答，不要用不同/更大的范围重复查询**\n\
-         10. **回复排版用规范 Markdown**：列举多条时务必每条独占一行；有序列表写成「1. 内容」（数字、点、空格，再接内容），各条之间用换行分隔，绝不要把 1.2.3. 挤在同一行；金额、要点可用 **加粗** 突出",
-        now = now.format("%Y-%m-%d %H:%M:%S"),
-        category_list = category_list.trim(),
-        member_list = member_list,
-        today = now.format("%Y-%m-%d"),
-        one_month_ago = (now - chrono::Duration::days(30)).format("%Y-%m-%d"),
-    );
+    let system_prompt = build_system_prompt(&now, &tree.prompt_listing(), &member_list);
 
     let history = sqlx::query_as::<_, ChatMessage>(
-        "SELECT * FROM chat_messages WHERE family_id = $1 ORDER BY created_at DESC LIMIT 20",
+        "SELECT * FROM chat_messages WHERE family_id = $1 ORDER BY created_at DESC LIMIT $2",
     )
     .bind(family_id)
+    .bind(HISTORY_WINDOW)
     .fetch_all(pool)
     .await?;
 
-    let mut messages = vec![serde_json::json!({
-        "role": "system",
-        "content": system_prompt,
-    })];
-
-    // Rebuild a faithful OpenAI-format history including tool calls and tool
-    // results. A text-only history (assistant prose with no tool context) taught
-    // weak models that "recording" just means replying with a confirmation
-    // sentence — so they stopped calling the tools. Replaying the real chain
-    // (user → assistant[tool_calls] → tool → assistant) keeps them on track.
-    let mut history_msgs: Vec<serde_json::Value> = Vec::new();
-    for msg in history.into_iter().rev() {
-        match msg.role.as_str() {
-            "tool" => {
-                history_msgs.push(serde_json::json!({
-                    "role": "tool",
-                    "tool_call_id": msg.tool_call_id.unwrap_or_default(),
-                    "content": msg.content,
-                }));
-            }
-            "assistant" => {
-                // Strip any legacy "✅ 记账成功！…" echo blocks from older rows.
-                let content = strip_tool_echoes(&msg.content);
-                let tool_calls = msg
-                    .tool_calls
-                    .as_deref()
-                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
-
-                let mut m = serde_json::json!({ "role": "assistant" });
-                if !content.is_empty() {
-                    m["content"] = serde_json::Value::String(content.clone());
-                }
-                match tool_calls {
-                    Some(tc) => m["tool_calls"] = tc,
-                    None if content.is_empty() => continue, // nothing useful
-                    None => {}
-                }
-                history_msgs.push(m);
-            }
-            _ => {
-                if msg.content.trim().is_empty() {
-                    continue;
-                }
-                history_msgs.push(serde_json::json!({
-                    "role": "user",
-                    "content": msg.content,
-                }));
-            }
-        }
-    }
-
-    // The 20-message window may begin in the middle of a tool turn, leaving
-    // leading `tool` messages whose parent assistant `tool_calls` fell outside
-    // the window. The API rejects a tool message without a preceding tool call,
-    // so drop those orphans.
-    while matches!(
-        history_msgs.first().and_then(|m| m.get("role")).and_then(|r| r.as_str()),
-        Some("tool")
-    ) {
-        history_msgs.remove(0);
-    }
-
-    messages.extend(history_msgs);
-
-    let tools = serde_json::json!([
-        {
-            "type": "function",
-            "function": {
-                "name": "create_transaction",
-                "description": "创建一条新的收支记录。当用户描述了一笔明确的收入或支出时调用此工具。如果用户一次性描述了多笔（如「打车20，午饭35，买菜50」），请为每一笔分别调用一次本工具（可在同一轮一次性发起多个调用）。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "type": {
-                            "type": "string",
-                            "enum": ["income", "expense"],
-                            "description": "交易类型：income=收入, expense=支出"
-                        },
-                        "amount": {
-                            "type": "number",
-                            "description": "金额（正数）"
-                        },
-                        "category_name": {
-                            "type": "string",
-                            "description": "一级分类名称，必须从可用分类中选择"
-                        },
-                        "subcategory_name": {
-                            "type": "string",
-                            "description": "二级分类名称（可选），必须属于对应的一级分类"
-                        },
-                        "date": {
-                            "type": "string",
-                            "format": "date",
-                            "description": "日期，格式 YYYY-MM-DD"
-                        },
-                        "time": {
-                            "type": "string",
-                            "description": "时间，格式 HH:MM:SS（可选，默认当前时间）"
-                        },
-                        "currency": {
-                            "type": "string",
-                            "description": "币种代码（可选，默认 CNY）"
-                        },
-                        "members": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "涉及的人员姓名列表（可选）"
-                        },
-                        "note": {
-                            "type": "string",
-                            "description": "备注信息（可选）"
-                        }
-                    },
-                    "required": ["type", "amount", "category_name", "date"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "query_transactions",
-                "description": "查询用户的交易记录。用于回答用户关于消费统计、支出分析等问题。返回指定时间范围内的交易明细。当用户问「最大/最贵/最高的N笔」时，务必设置 sort_by=amount_desc 并用 limit 限定条数。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "start_date": {
-                            "type": "string",
-                            "format": "date",
-                            "description": "查询起始日期（含），格式 YYYY-MM-DD。严格按用户指定的范围，不要自行扩大。"
-                        },
-                        "end_date": {
-                            "type": "string",
-                            "format": "date",
-                            "description": "查询结束日期（含），格式 YYYY-MM-DD。严格按用户指定的范围，不要自行扩大。"
-                        },
-                        "type": {
-                            "type": "string",
-                            "enum": ["income", "expense"],
-                            "description": "筛选交易类型（可选）"
-                        },
-                        "category_name": {
-                            "type": "string",
-                            "description": "筛选一级分类名称（可选）"
-                        },
-                        "member_name": {
-                            "type": "string",
-                            "description": "筛选涉及的成员姓名（可选）"
-                        },
-                        "sort_by": {
-                            "type": "string",
-                            "enum": ["date_desc", "amount_desc"],
-                            "description": "排序方式（可选）: date_desc=按日期倒序(默认), amount_desc=按金额从大到小。问「最大/最贵的N笔」时用 amount_desc。"
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "最多返回多少条记录（可选，默认100，最大200）。问「最大的3笔」时设为3。"
-                        }
-                    },
-                    "required": ["start_date", "end_date"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "delete_transaction",
-                "description": "删除一条交易记录。需要提供交易ID。如果不确定ID，请先用 query_transactions 查询。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "transaction_id": {
-                            "type": "string",
-                            "description": "要删除的交易记录ID（UUID格式）"
-                        }
-                    },
-                    "required": ["transaction_id"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "update_transaction",
-                "description": "修改一条已有的交易记录。需要提供交易ID和要修改的字段。如果不确定ID，请先用 query_transactions 查询。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "transaction_id": {
-                            "type": "string",
-                            "description": "要修改的交易记录ID（UUID格式）"
-                        },
-                        "type": {
-                            "type": "string",
-                            "enum": ["income", "expense"],
-                            "description": "修改交易类型"
-                        },
-                        "amount": {
-                            "type": "number",
-                            "description": "修改金额"
-                        },
-                        "category_name": {
-                            "type": "string",
-                            "description": "修改一级分类名称"
-                        },
-                        "subcategory_name": {
-                            "type": "string",
-                            "description": "修改二级分类名称"
-                        },
-                        "date": {
-                            "type": "string",
-                            "format": "date",
-                            "description": "修改日期，格式 YYYY-MM-DD"
-                        },
-                        "time": {
-                            "type": "string",
-                            "description": "修改时间，格式 HH:MM:SS"
-                        },
-                        "note": {
-                            "type": "string",
-                            "description": "修改备注"
-                        }
-                    },
-                    "required": ["transaction_id"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_statistics",
-                "description": "获取统计分析数据。可查询月度收支趋势、分类支出占比、成员消费分析。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "stat_type": {
-                            "type": "string",
-                            "enum": ["monthly_trend", "category_breakdown", "member_breakdown"],
-                            "description": "统计类型: monthly_trend=月度收支趋势, category_breakdown=分类支出占比, member_breakdown=成员消费分析"
-                        },
-                        "year": {
-                            "type": "integer",
-                            "description": "查询年份"
-                        },
-                        "month": {
-                            "type": "integer",
-                            "description": "查询月份（可选，1-12）"
-                        },
-                        "type": {
-                            "type": "string",
-                            "enum": ["income", "expense"],
-                            "description": "筛选收入或支出（仅 category_breakdown 和 member_breakdown 有效）"
-                        }
-                    },
-                    "required": ["stat_type", "year"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "create_social_gift",
-                "description": "记录一笔人情往来（红包、礼金、随礼等）。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "type": {
-                            "type": "string",
-                            "enum": ["given", "received"],
-                            "description": "类型: given=送出, received=收到"
-                        },
-                        "person_name": {
-                            "type": "string",
-                            "description": "对方姓名"
-                        },
-                        "relation": {
-                            "type": "string",
-                            "description": "关系（如 朋友、亲戚、同事，可选）"
-                        },
-                        "occasion": {
-                            "type": "string",
-                            "description": "事由（如 结婚、生日、满月、乔迁）"
-                        },
-                        "amount": {
-                            "type": "number",
-                            "description": "金额"
-                        },
-                        "date": {
-                            "type": "string",
-                            "format": "date",
-                            "description": "日期，格式 YYYY-MM-DD"
-                        },
-                        "note": {
-                            "type": "string",
-                            "description": "备注（可选）"
-                        }
-                    },
-                    "required": ["type", "person_name", "occasion", "amount", "date"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "query_social_gifts",
-                "description": "查询人情往来记录。可按时间、人名、类型筛选。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "start_date": {
-                            "type": "string",
-                            "format": "date",
-                            "description": "查询起始日期，格式 YYYY-MM-DD"
-                        },
-                        "end_date": {
-                            "type": "string",
-                            "format": "date",
-                            "description": "查询结束日期，格式 YYYY-MM-DD"
-                        },
-                        "person_name": {
-                            "type": "string",
-                            "description": "筛选对方姓名（可选）"
-                        },
-                        "type": {
-                            "type": "string",
-                            "enum": ["given", "received"],
-                            "description": "筛选类型（可选）"
-                        }
-                    },
-                    "required": ["start_date", "end_date"]
-                }
-            }
-        }
-    ]);
+    let mut messages = vec![json!({ "role": "system", "content": system_prompt })];
+    messages.extend(replay_history(history));
+    let tools = ai_tools::definitions();
 
     let api_key = llm_config.api_key.unwrap_or_default();
-    let api_url = llm_config.api_url.clone();
-    let model_name = llm_config.model_name.clone();
-    let pool_clone = pool.clone();
-
-    const MAX_ITERATIONS: usize = 10;
+    let api_url = llm_config.api_url;
+    let model_name = llm_config.model_name;
+    let ctx = ToolContext { pool: pool.clone(), user_id, family_id, now };
 
     let stream = async_stream::stream! {
-        let client = reqwest::Client::new();
-        // Messages to persist for this turn, in order, so the next request can
-        // replay the full tool-call chain: (role, content, tool_calls, tool_call_id).
-        let mut persist: Vec<(&'static str, String, Option<String>, Option<String>)> = Vec::new();
+        let client = match llm_client() {
+            Ok(c) => c,
+            Err(e) => {
+                yield Ok(Event::default().event("error").data(format!("创建请求客户端失败: {e}")));
+                yield Ok(Event::default().data("[DONE]"));
+                return;
+            }
+        };
 
-        // Loop guard: weak models often re-issue the *same* tool call repeatedly
-        // and never converge. We cache executed signatures so duplicates don't
-        // re-hit the DB, and once a duplicate is seen we force the model to
-        // answer in plain text (tool_choice = none) on the next turn.
-        let mut executed_signatures: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let persist_base = Utc::now();
+        let mut persist_seq: i64 = 0;
+
+        // Loop guards for weak models: a repeated read is answered from the
+        // earlier result, and a write that already succeeded in an earlier
+        // round is not replayed (identical writes within one round are a real
+        // batch, e.g. two identical coffees).
+        let mut executed_reads: HashSet<String> = HashSet::new();
+        let mut completed_writes: HashSet<String> = HashSet::new();
         let mut force_final = false;
+        // Whether the reply bubble has text yet, and whether the next round's
+        // prose needs a paragraph break after tool output.
+        let mut shown_any = false;
+        let mut needs_break = false;
 
         for iteration in 0..MAX_ITERATIONS {
+            let last_round = iteration + 1 == MAX_ITERATIONS;
             tracing::debug!(iteration, force_final, "agent loop: starting iteration");
 
-            let mut request_body = serde_json::json!({
+            let mut request_body = json!({
                 "model": model_name,
                 "messages": messages,
                 "stream": true,
                 "tools": tools,
             });
-            if force_final {
-                // Stop offering tools so the model produces a textual answer
-                // from the results it already gathered.
-                request_body["tool_choice"] = serde_json::json!("none");
+            if force_final || last_round {
+                // Stop offering tools so the model answers from what it has.
+                request_body["tool_choice"] = json!("none");
             }
 
-            let response = match client
-                .post(&api_url)
-                .header("Authorization", format!("Bearer {}", api_key))
-                .header("Content-Type", "application/json")
-                .json(&request_body)
-                .send()
-                .await
-            {
+            let mut request = client.post(&api_url).header("Content-Type", "application/json");
+            if !api_key.is_empty() {
+                request = request.bearer_auth(&api_key);
+            }
+            let response = match request.json(&request_body).send().await {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::error!(error = %e, "agent loop: LLM request failed");
-                    yield Ok(Event::default().event("error").data(format!("LLM 请求失败: {}", e)));
+                    yield Ok(Event::default().event("error").data(format!("LLM 请求失败: {}", describe_request_error(&e))));
                     break;
                 }
             };
-
             if !response.status().is_success() {
+                let status = response.status();
                 let body = response.text().await.unwrap_or_default();
-                tracing::error!(body = %body, "agent loop: LLM API error");
-                yield Ok(Event::default().event("error").data(format!("LLM API 错误: {}", body)));
+                tracing::error!(%status, body = %body, "agent loop: LLM API error");
+                yield Ok(Event::default().event("error").data(format!("LLM API 错误 ({}): {}", status.as_u16(), body)));
                 break;
             }
 
-            // Stream one LLM turn, accumulate content + tool calls
+            // Stream one LLM turn, accumulating prose and tool calls.
             let mut turn_content = String::new();
-            let mut tool_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, args)
-            // Temp accumulators for streaming tool call chunks (keyed by index)
-            let mut tc_indices: std::collections::HashMap<usize, (String, String, String)> = std::collections::HashMap::new();
+            let mut pending: BTreeMap<usize, PendingToolCall> = BTreeMap::new();
+            let mut thinking = false;
+            let mut stream_error: Option<String> = None;
+            let mut buf: Vec<u8> = Vec::new();
+            let mut body = response.bytes_stream();
+            let mut finished = false;
 
-            let mut byte_stream = response.bytes_stream();
-            let mut buffer = String::new();
-            let mut thinking_phase = false;
-
-            while let Some(chunk) = byte_stream.next().await {
-                match chunk {
-                    Ok(bytes) => {
-                        buffer.push_str(&String::from_utf8_lossy(&bytes));
-
-                        while let Some(pos) = buffer.find('\n') {
-                            let line = buffer[..pos].trim().to_string();
-                            buffer = buffer[pos + 1..].to_string();
-
-                            if line.is_empty() { continue; }
-                            if line == "data: [DONE]" { break; }
-
-                            if let Some(data) = line.strip_prefix("data: ") {
-                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
-                                    let delta = &parsed["choices"][0]["delta"];
-                                    let reasoning = delta["reasoning_content"].as_str().unwrap_or("");
-                                    let content_text = delta["content"].as_str().unwrap_or("");
-
-                                    if !reasoning.is_empty() {
-                                        thinking_phase = true;
-                                    }
-
-                                    if thinking_phase && reasoning.is_empty() && !content_text.is_empty() {
-                                        thinking_phase = false;
-                                    }
-
-                                    if !content_text.is_empty() && !thinking_phase {
-                                        turn_content.push_str(content_text);
-                                        yield Ok(Event::default().data(content_text));
-                                    }
-
-                                    // Accumulate tool calls (may arrive across multiple chunks)
-                                    if let Some(tcs) = parsed["choices"][0]["delta"]["tool_calls"].as_array() {
-                                        for tc in tcs {
-                                            let idx = tc["index"].as_u64().unwrap_or(0) as usize;
-                                            let entry = tc_indices.entry(idx).or_insert_with(|| {
-                                                let id = tc["id"].as_str().unwrap_or("").to_string();
-                                                (id, String::new(), String::new())
-                                            });
-                                            if let Some(id) = tc["id"].as_str() {
-                                                if !id.is_empty() { entry.0 = id.to_string(); }
-                                            }
-                                            if let Some(name) = tc["function"]["name"].as_str() {
-                                                entry.1.push_str(name);
-                                            }
-                                            if let Some(args) = tc["function"]["arguments"].as_str() {
-                                                entry.2.push_str(args);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+            while !finished {
+                let lines = match body.next().await {
+                    Some(Ok(chunk)) => {
+                        buf.extend_from_slice(&chunk);
+                        take_lines(&mut buf)
                     }
-                    Err(e) => {
-                        tracing::error!(error = %e, "agent loop: stream error");
-                        yield Ok(Event::default().event("error").data(e.to_string()));
+                    Some(Err(e)) => {
+                        stream_error = Some(format!("读取模型响应失败: {}", describe_request_error(&e)));
                         break;
                     }
+                    None => {
+                        finished = true;
+                        take_rest(&mut buf)
+                    }
+                };
+
+                for line in lines {
+                    let Some(data) = sse_data(&line) else { continue };
+                    if data == "[DONE]" {
+                        finished = true;
+                        break;
+                    }
+                    let Ok(chunk) = serde_json::from_str::<Value>(data) else { continue };
+                    if let Some(err) = provider_error(&chunk) {
+                        stream_error = Some(format!("LLM API 错误: {err}"));
+                        finished = true;
+                        break;
+                    }
+
+                    let delta = &chunk["choices"][0]["delta"];
+                    let reasoning = delta["reasoning_content"]
+                        .as_str()
+                        .or_else(|| delta["reasoning"].as_str())
+                        .unwrap_or("");
+                    let text = delta["content"].as_str().unwrap_or("");
+                    // Reasoning models (DeepSeek R1 etc.): hide the thinking
+                    // phase, including content that leaks alongside it.
+                    if !reasoning.is_empty() {
+                        thinking = true;
+                    } else if thinking && !text.is_empty() {
+                        thinking = false;
+                    }
+                    if !text.is_empty() && !thinking {
+                        if needs_break {
+                            needs_break = false;
+                            if shown_any {
+                                yield Ok(Event::default().data("\n\n"));
+                            }
+                        }
+                        turn_content.push_str(text);
+                        shown_any = true;
+                        yield Ok(Event::default().data(text));
+                    }
+
+                    if let Some(calls) = delta["tool_calls"].as_array() {
+                        accumulate_tool_calls(&mut pending, calls);
+                    }
                 }
             }
 
-            // Collect accumulated tool calls sorted by index
-            let mut sorted_indices: Vec<usize> = tc_indices.keys().copied().collect();
-            sorted_indices.sort();
-            for idx in sorted_indices {
-                if let Some(tc) = tc_indices.remove(&idx) {
-                    tool_calls.push(tc);
-                }
+            if let Some(err) = stream_error {
+                tracing::error!(error = %err, "agent loop: stream error");
+                yield Ok(Event::default().event("error").data(err));
+                break;
             }
 
-            // No tool calls → agent is done; this turn's prose is the final answer.
-            if tool_calls.is_empty() {
+            let calls = finalize_tool_calls(pending);
+
+            // No tool calls → this turn's prose is the final answer.
+            if calls.is_empty() {
                 tracing::debug!(iteration, "agent loop: no tool calls, done");
                 if !turn_content.trim().is_empty() {
-                    persist.push(("assistant", turn_content.clone(), None, None));
+                    let row = PersistRow { role: "assistant", content: turn_content, tool_calls: None, tool_call_id: None };
+                    spawn_persist(&ctx, persist_base, &mut persist_seq, vec![row]);
                 }
                 break;
             }
 
-            // The model ignored tool_choice=none and is still looping on tools
-            // it already ran. Stop here to avoid burning iterations / hanging.
-            if force_final
-                && tool_calls
-                    .iter()
-                    .all(|(_, name, args)| executed_signatures.contains(&format!("{}|{}", name, args)))
-            {
+            if last_round {
+                tracing::warn!(iteration, "agent loop: iteration cap reached with pending tool calls");
+                let note = "（操作步骤过多，已停止。请把需求拆小一些再试。）";
+                yield Ok(Event::default().data(if shown_any { format!("\n\n{note}") } else { note.to_string() }));
+                break;
+            }
+
+            // The model ignored tool_choice=none and keeps repeating reads it already ran.
+            if force_final && calls.iter().all(|c| executed_reads.contains(&c.signature())) {
                 tracing::warn!(iteration, "agent loop: model stuck repeating tool calls, breaking");
                 break;
             }
 
-            tracing::debug!(iteration, count = tool_calls.len(), "agent loop: executing tool calls");
+            tracing::debug!(iteration, count = calls.len(), "agent loop: executing tool calls");
 
-            // Build assistant message with tool_calls for message history
-            let tc_json: Vec<serde_json::Value> = tool_calls.iter().map(|(id, name, args)| {
-                serde_json::json!({
-                    "id": id,
-                    "type": "function",
-                    "function": { "name": name, "arguments": args }
-                })
-            }).collect();
-
-            let tc_array = serde_json::Value::Array(tc_json);
-            let tc_string = serde_json::to_string(&tc_array).ok();
-
-            let mut assistant_msg = serde_json::json!({ "role": "assistant" });
+            let tc_json: Vec<Value> = calls.iter().map(PendingToolCall::to_json).collect();
+            let mut assistant_msg = json!({ "role": "assistant", "tool_calls": tc_json });
             if !turn_content.is_empty() {
-                assistant_msg["content"] = serde_json::Value::String(turn_content.clone());
+                assistant_msg["content"] = Value::String(turn_content.clone());
             }
-            assistant_msg["tool_calls"] = tc_array;
             messages.push(assistant_msg);
-            persist.push(("assistant", turn_content.clone(), tc_string, None));
 
-            // Execute each tool call and append results
-            for (tc_id, tc_name, tc_args) in &tool_calls {
-                // Only de-duplicate *read-only* tools. Write operations
-                // (create/update/delete/social_gift) must always run — a user
-                // may legitimately batch two identical entries, and dedup would
-                // silently drop the second one.
-                let is_read_only = matches!(
-                    tc_name.as_str(),
-                    "query_transactions" | "get_statistics" | "query_social_gifts"
-                );
+            let mut rows = vec![PersistRow {
+                role: "assistant",
+                content: turn_content,
+                tool_calls: serde_json::to_string(&tc_json).ok(),
+                tool_call_id: None,
+            }];
+            let mut succeeded_writes: Vec<String> = Vec::new();
 
-                // Duplicate query: don't re-query the DB, just nudge the model to
-                // answer from what it already has. Forces convergence next turn.
-                if is_read_only && !executed_signatures.insert(format!("{}|{}", tc_name, tc_args)) {
-                    tracing::warn!(tool = %tc_name, args = %tc_args, "agent loop: duplicate tool call, skipping execution");
+            for call in &calls {
+                let signature = call.signature();
+                let kind = ai_tools::tool_kind(&call.name);
+
+                let content = if kind == ToolKind::Read && !executed_reads.insert(signature.clone()) {
+                    tracing::warn!(tool = %call.name, "agent loop: duplicate read, skipping");
                     force_final = true;
-                    let dup_note = "（已用相同条件查询过，结果见上文。请不要再调用工具，直接根据上面的数据用中文回答用户的问题。）";
-                    messages.push(serde_json::json!({
-                        "role": "tool",
-                        "tool_call_id": tc_id,
-                        "content": dup_note,
-                    }));
-                    // Persist so the assistant tool_calls row above keeps a
-                    // matching tool response (every tool_call needs one).
-                    persist.push(("tool", dup_note.to_string(), None, Some(tc_id.clone())));
-                    continue;
-                }
-
-                tracing::debug!(tool = %tc_name, args = %tc_args, "agent loop: executing tool");
-
-                let (result_content, is_success) = match tc_name.as_str() {
-                    "create_transaction" => {
-                        match execute_create_transaction(&pool_clone, user_id, family_id, tc_args).await {
-                            Ok(summary) => {
-                                let result_json = serde_json::json!({ "success": true, "summary": summary });
-                                yield Ok(Event::default().event("tool_result").data(
-                                    serde_json::to_string(&result_json).unwrap_or_default()
-                                ));
-                                (summary, true)
-                            }
-                            Err(err_msg) => {
-                                let result_json = serde_json::json!({ "success": false, "error": err_msg });
-                                yield Ok(Event::default().event("tool_result").data(
-                                    serde_json::to_string(&result_json).unwrap_or_default()
-                                ));
-                                (format!("Error: {}", err_msg), false)
-                            }
+                    DUPLICATE_READ_NOTE.to_string()
+                } else if kind == ToolKind::Write && completed_writes.contains(&signature) {
+                    tracing::warn!(tool = %call.name, "agent loop: repeated write, skipping");
+                    force_final = true;
+                    DUPLICATE_WRITE_NOTE.to_string()
+                } else {
+                    tracing::debug!(tool = %call.name, args = %call.args, "agent loop: executing tool");
+                    let outcome = ai_tools::execute(&ctx, &call.name, &call.args).await;
+                    if kind == ToolKind::Write {
+                        let payload = match &outcome {
+                            Ok(out) => json!({ "success": true, "tool": call.name, "summary": out.text }),
+                            Err(err) => json!({ "success": false, "tool": call.name, "error": err }),
+                        };
+                        yield Ok(Event::default().event("tool_result").data(payload.to_string()));
+                        shown_any = true;
+                        if outcome.is_ok() {
+                            succeeded_writes.push(signature);
                         }
                     }
-                    "query_transactions" => {
-                        match execute_query_transactions(&pool_clone, family_id, tc_args).await {
-                            Ok(result) => (result, true),
-                            Err(err_msg) => (format!("Error: {}", err_msg), false),
+                    match outcome {
+                        Ok(out) => out.for_model(),
+                        Err(err) => {
+                            tracing::warn!(tool = %call.name, error = %err, "agent loop: tool failed");
+                            format!("Error: {err}")
                         }
-                    }
-                    "delete_transaction" => {
-                        match execute_delete_transaction(&pool_clone, family_id, tc_args).await {
-                            Ok(summary) => {
-                                let result_json = serde_json::json!({ "success": true, "summary": summary });
-                                yield Ok(Event::default().event("tool_result").data(
-                                    serde_json::to_string(&result_json).unwrap_or_default()
-                                ));
-                                (summary, true)
-                            }
-                            Err(err_msg) => {
-                                let result_json = serde_json::json!({ "success": false, "error": err_msg });
-                                yield Ok(Event::default().event("tool_result").data(
-                                    serde_json::to_string(&result_json).unwrap_or_default()
-                                ));
-                                (format!("Error: {}", err_msg), false)
-                            }
-                        }
-                    }
-                    "update_transaction" => {
-                        match execute_update_transaction(&pool_clone, user_id, family_id, tc_args).await {
-                            Ok(summary) => {
-                                let result_json = serde_json::json!({ "success": true, "summary": summary });
-                                yield Ok(Event::default().event("tool_result").data(
-                                    serde_json::to_string(&result_json).unwrap_or_default()
-                                ));
-                                (summary, true)
-                            }
-                            Err(err_msg) => {
-                                let result_json = serde_json::json!({ "success": false, "error": err_msg });
-                                yield Ok(Event::default().event("tool_result").data(
-                                    serde_json::to_string(&result_json).unwrap_or_default()
-                                ));
-                                (format!("Error: {}", err_msg), false)
-                            }
-                        }
-                    }
-                    "get_statistics" => {
-                        match execute_get_statistics(&pool_clone, family_id, tc_args).await {
-                            Ok(result) => (result, true),
-                            Err(err_msg) => (format!("Error: {}", err_msg), false),
-                        }
-                    }
-                    "create_social_gift" => {
-                        match execute_create_social_gift(&pool_clone, user_id, family_id, tc_args).await {
-                            Ok(summary) => {
-                                let result_json = serde_json::json!({ "success": true, "summary": summary });
-                                yield Ok(Event::default().event("tool_result").data(
-                                    serde_json::to_string(&result_json).unwrap_or_default()
-                                ));
-                                (summary, true)
-                            }
-                            Err(err_msg) => {
-                                let result_json = serde_json::json!({ "success": false, "error": err_msg });
-                                yield Ok(Event::default().event("tool_result").data(
-                                    serde_json::to_string(&result_json).unwrap_or_default()
-                                ));
-                                (format!("Error: {}", err_msg), false)
-                            }
-                        }
-                    }
-                    "query_social_gifts" => {
-                        match execute_query_social_gifts(&pool_clone, family_id, tc_args).await {
-                            Ok(result) => (result, true),
-                            Err(err_msg) => (format!("Error: {}", err_msg), false),
-                        }
-                    }
-                    other => {
-                        (format!("Unknown tool: {}", other), false)
                     }
                 };
 
-                let _ = is_success;
-                persist.push(("tool", result_content.clone(), None, Some(tc_id.clone())));
-                messages.push(serde_json::json!({
-                    "role": "tool",
-                    "tool_call_id": tc_id,
-                    "content": result_content,
-                }));
+                messages.push(json!({ "role": "tool", "tool_call_id": call.id, "content": content }));
+                rows.push(PersistRow {
+                    role: "tool",
+                    content,
+                    tool_calls: None,
+                    tool_call_id: Some(call.id.clone()),
+                });
             }
 
-            // Loop continues: next iteration sends updated messages back to LLM
+            completed_writes.extend(succeeded_writes);
+            needs_break = true;
+            spawn_persist(&ctx, persist_base, &mut persist_seq, rows);
         }
 
         yield Ok(Event::default().data("[DONE]"));
-
-        // Persist the whole turn (assistant prose, tool calls, tool results) in
-        // order, so the next request replays a faithful tool-call history. The
-        // incremental millisecond offset guarantees a stable created_at ordering.
-        let base = Utc::now();
-        for (i, (role, content, tool_calls, tool_call_id)) in persist.into_iter().enumerate() {
-            let _ = sqlx::query(
-                "INSERT INTO chat_messages
-                    (id, user_id, family_id, role, content, tool_calls, tool_call_id, created_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-            )
-            .bind(Uuid::new_v4())
-            .bind(user_id)
-            .bind(family_id)
-            .bind(role)
-            .bind(content)
-            .bind(tool_calls)
-            .bind(tool_call_id)
-            .bind(base + chrono::Duration::milliseconds(i as i64))
-            .execute(&pool_clone)
-            .await;
-        }
     };
 
     Ok(stream)
@@ -1105,686 +979,6 @@ fn strip_tool_echoes(content: &str) -> String {
     }
 
     out.join("\n").trim().to_string()
-}
-
-async fn execute_create_transaction(
-    pool: &PgPool,
-    user_id: Uuid,
-    family_id: Uuid,
-    args_json: &str,
-) -> Result<String, String> {
-    let args: serde_json::Value =
-        serde_json::from_str(args_json).map_err(|e| format!("解析参数失败: {}", e))?;
-
-    let txn_type = args["type"]
-        .as_str()
-        .ok_or("缺少交易类型")?
-        .to_string();
-    let amount = args["amount"]
-        .as_f64()
-        .ok_or("缺少金额")?;
-    let category_name = args["category_name"]
-        .as_str()
-        .ok_or("缺少分类名称")?;
-    let date_str = args["date"]
-        .as_str()
-        .ok_or("缺少日期")?;
-    let subcategory_name = args["subcategory_name"].as_str();
-    let currency = args["currency"].as_str().unwrap_or("CNY");
-    let time_str = args["time"].as_str();
-    let note = args["note"].as_str();
-    let members: Option<Vec<String>> = args["members"]
-        .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
-
-    // Resolve category from the model-chosen name.
-    let mut category = sqlx::query_as::<_, Category>(
-        "SELECT * FROM categories WHERE name = $1 AND (user_id IS NULL OR family_id = $2) LIMIT 1",
-    )
-    .bind(category_name)
-    .bind(family_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("查询分类失败: {}", e))?
-    .ok_or_else(|| format!("找不到分类「{}」", category_name))?;
-
-    // Resolve subcategory. Weak models frequently pick the right subcategory but
-    // the wrong parent (e.g. category=居家生活, subcategory=日常买菜 which really
-    // belongs to 餐饮美食). If the subcategory isn't under the chosen category,
-    // resolve it by name within this family; when it maps to exactly one
-    // subcategory we adopt it AND correct the parent category — self-healing the
-    // misclassification instead of silently dropping the subcategory.
-    let subcategory_id = if let Some(sub_name) = subcategory_name {
-        let exact = sqlx::query_as::<_, Subcategory>(
-            "SELECT * FROM subcategories WHERE name = $1 AND category_id = $2 LIMIT 1",
-        )
-        .bind(sub_name)
-        .bind(category.id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("查询子分类失败: {}", e))?;
-
-        if let Some(s) = exact {
-            Some(s.id)
-        } else {
-            // Look the subcategory up across the family's categories of the same
-            // transaction type. Only auto-correct when it's unambiguous (a single
-            // match) — names like 其他 exist under multiple parents.
-            let candidates = sqlx::query_as::<_, Subcategory>(
-                "SELECT s.* FROM subcategories s
-                 JOIN categories c ON s.category_id = c.id
-                 WHERE s.name = $1
-                   AND (c.user_id IS NULL OR c.family_id = $2)
-                   AND c.type = $3",
-            )
-            .bind(sub_name)
-            .bind(family_id)
-            .bind(&txn_type)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| format!("查询子分类失败: {}", e))?;
-
-            if candidates.len() == 1 {
-                let s = &candidates[0];
-                if s.category_id != category.id {
-                    if let Some(real_parent) = sqlx::query_as::<_, Category>(
-                        "SELECT * FROM categories WHERE id = $1 LIMIT 1",
-                    )
-                    .bind(s.category_id)
-                    .fetch_optional(pool)
-                    .await
-                    .map_err(|e| format!("查询分类失败: {}", e))?
-                    {
-                        tracing::info!(
-                            chosen = %category.name,
-                            corrected = %real_parent.name,
-                            subcategory = %sub_name,
-                            "AI create_transaction: corrected parent category from subcategory",
-                        );
-                        category = real_parent;
-                    }
-                }
-                Some(s.id)
-            } else {
-                // Ambiguous or unknown subcategory → keep the chosen category and
-                // record without a subcategory.
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-        .map_err(|_| format!("日期格式错误: {}", date_str))?;
-
-    let time = if let Some(t) = time_str {
-        NaiveTime::parse_from_str(t, "%H:%M:%S")
-            .or_else(|_| NaiveTime::parse_from_str(t, "%H:%M"))
-            .unwrap_or_else(|_| Local::now().time())
-    } else {
-        Local::now().time()
-    };
-
-    let amount_decimal = Decimal::from_str(&format!("{:.2}", amount))
-        .map_err(|_| format!("金额格式错误: {}", amount))?;
-
-    let req = CreateTransactionRequest {
-        category_id: category.id,
-        subcategory_id,
-        r#type: txn_type.clone(),
-        amount: amount_decimal,
-        currency: currency.to_string(),
-        date,
-        time,
-        location: None,
-        note: note.map(String::from),
-        members,
-    };
-
-    let txn = transaction::create_transaction(pool, user_id, family_id, req)
-        .await
-        .map_err(|e| format!("创建交易失败: {}", e))?;
-
-    let type_label = if txn_type == "income" { "收入" } else { "支出" };
-    // Only show the subcategory if it was actually resolved & saved.
-    let sub_label = match (subcategory_id, subcategory_name) {
-        (Some(_), Some(sub_name)) => format!(" > {}", sub_name),
-        _ => String::new(),
-    };
-    let member_label = if let Some(m) = args["members"].as_array() {
-        if !m.is_empty() {
-            let names: Vec<&str> = m.iter().filter_map(|v| v.as_str()).collect();
-            format!("\n成员: {}", names.join("、"))
-        } else {
-            String::new()
-        }
-    } else {
-        String::new()
-    };
-    let note_label = note.map(|n| format!("\n备注: {}", n)).unwrap_or_default();
-
-    let summary = format!(
-        "\n\n✅ 记账成功！\n{type_label} {amount:.2} {currency}\n分类: {category}{sub}\n日期: {date} {time}{members}{note}",
-        type_label = type_label,
-        amount = amount,
-        currency = currency,
-        category = category.name,
-        sub = sub_label,
-        date = date.format("%Y-%m-%d"),
-        time = time.format("%H:%M"),
-        members = member_label,
-        note = note_label,
-    );
-
-    tracing::info!(txn_id = %txn.id, "svc::chat_stream: transaction created via AI");
-    Ok(summary)
-}
-
-async fn execute_query_transactions(
-    pool: &PgPool,
-    family_id: Uuid,
-    args_json: &str,
-) -> Result<String, String> {
-    let args: serde_json::Value =
-        serde_json::from_str(args_json).map_err(|e| format!("解析参数失败: {}", e))?;
-
-    let start_date_str = args["start_date"]
-        .as_str()
-        .ok_or("缺少起始日期")?;
-    let end_date_str = args["end_date"]
-        .as_str()
-        .ok_or("缺少结束日期")?;
-
-    let start_date = NaiveDate::parse_from_str(start_date_str, "%Y-%m-%d")
-        .map_err(|_| format!("起始日期格式错误: {}", start_date_str))?;
-    let end_date = NaiveDate::parse_from_str(end_date_str, "%Y-%m-%d")
-        .map_err(|_| format!("结束日期格式错误: {}", end_date_str))?;
-
-    let txn_type = args["type"].as_str().map(String::from);
-    let category_name = args["category_name"].as_str();
-    let member_name = args["member_name"].as_str().map(String::from);
-
-    // Resolve category_name → category_id
-    let category_id = if let Some(cat_name) = category_name {
-        let cat = sqlx::query_as::<_, Category>(
-            "SELECT * FROM categories WHERE name = $1 AND (user_id IS NULL OR family_id = $2) LIMIT 1",
-        )
-        .bind(cat_name)
-        .bind(family_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("查询分类失败: {}", e))?;
-        cat.map(|c| c.id)
-    } else {
-        None
-    };
-
-    let sort_by = args["sort_by"].as_str().unwrap_or("date_desc");
-    let limit_n: i64 = args["limit"].as_i64().unwrap_or(100).clamp(1, 200);
-
-    // order_clause is chosen from a fixed allow-list (no user input) → injection-safe
-    let order_clause = match sort_by {
-        "amount_desc" => "ORDER BY t.amount DESC, t.date DESC, t.id",
-        _ => "ORDER BY t.date DESC, t.time DESC, t.id",
-    };
-
-    // Aggregate over the FULL filtered range (independent of the row limit), so
-    // totals stay correct even when we only return the top-N detail rows.
-    let agg: (i64, Decimal, Decimal) = sqlx::query_as(
-        "SELECT
-            COUNT(*)::bigint,
-            COALESCE(SUM(t.amount) FILTER (WHERE t.type = 'income'), 0),
-            COALESCE(SUM(t.amount) FILTER (WHERE t.type = 'expense'), 0)
-         FROM transactions t
-         WHERE t.family_id = $1
-           AND t.date >= $2 AND t.date <= $3
-           AND ($4::uuid IS NULL OR t.category_id = $4)
-           AND ($5::text IS NULL OR t.type = $5)
-           AND ($6::text IS NULL OR EXISTS (
-                SELECT 1 FROM transaction_members tm
-                WHERE tm.transaction_id = t.id AND tm.member_name = $6))",
-    )
-    .bind(family_id)
-    .bind(start_date)
-    .bind(end_date)
-    .bind(category_id)
-    .bind(&txn_type)
-    .bind(&member_name)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("查询交易失败: {}", e))?;
-
-    let total_count = agg.0;
-    let total_income = agg.1;
-    let total_expense = agg.2;
-
-    let detail_sql = format!(
-        "SELECT t.* FROM transactions t
-         WHERE t.family_id = $1
-           AND t.date >= $2 AND t.date <= $3
-           AND ($4::uuid IS NULL OR t.category_id = $4)
-           AND ($5::text IS NULL OR t.type = $5)
-           AND ($6::text IS NULL OR EXISTS (
-                SELECT 1 FROM transaction_members tm
-                WHERE tm.transaction_id = t.id AND tm.member_name = $6))
-         {order_clause}
-         LIMIT $7"
-    );
-
-    let rows = sqlx::query_as::<_, crate::models::Transaction>(&detail_sql)
-        .bind(family_id)
-        .bind(start_date)
-        .bind(end_date)
-        .bind(category_id)
-        .bind(&txn_type)
-        .bind(&member_name)
-        .bind(limit_n)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("查询交易失败: {}", e))?;
-
-    // Also fetch category names for display
-    let cat_map: std::collections::HashMap<Uuid, String> = sqlx::query_as::<_, Category>(
-        "SELECT * FROM categories WHERE user_id IS NULL OR family_id = $1",
-    )
-    .bind(family_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("查询分类失败: {}", e))?
-    .into_iter()
-    .map(|c| (c.id, c.name))
-    .collect();
-
-    let mut lines = Vec::new();
-    for txn in &rows {
-        let cat_name = cat_map.get(&txn.category_id).map(|s| s.as_str()).unwrap_or("未知");
-        let type_mark = if txn.r#type == "income" { "+" } else { "-" };
-        let note_part = txn.note.as_deref().unwrap_or("");
-        lines.push(format!(
-            "[{}] {} | {}{} {} | {} | {}",
-            txn.id,
-            txn.date.format("%Y-%m-%d"),
-            type_mark,
-            txn.amount,
-            txn.currency,
-            cat_name,
-            note_part,
-        ));
-    }
-
-    let sort_label = if sort_by == "amount_desc" { "按金额从大到小" } else { "按日期倒序" };
-    let truncated_note = if total_count > rows.len() as i64 {
-        format!(
-            "\n\n（注意：该范围共 {} 条记录，以上仅{}返回前 {} 条。如需完整统计请改用 get_statistics，或缩小时间范围。）",
-            total_count, sort_label, rows.len()
-        )
-    } else {
-        String::new()
-    };
-
-    let summary = format!(
-        "查询结果（{} 至 {}，排序：{}）:\n该范围共 {} 条记录，本次返回 {} 条\n区间总收入: {} CNY\n区间总支出: {} CNY\n净额: {} CNY\n\n明细:\n{}{}",
-        start_date.format("%Y-%m-%d"),
-        end_date.format("%Y-%m-%d"),
-        sort_label,
-        total_count,
-        rows.len(),
-        total_income,
-        total_expense,
-        total_income - total_expense,
-        if lines.is_empty() { "无记录".to_string() } else { lines.join("\n") },
-        truncated_note,
-    );
-
-    Ok(summary)
-}
-
-async fn execute_delete_transaction(
-    pool: &PgPool,
-    family_id: Uuid,
-    args_json: &str,
-) -> Result<String, String> {
-    let args: serde_json::Value =
-        serde_json::from_str(args_json).map_err(|e| format!("解析参数失败: {}", e))?;
-
-    let txn_id_str = args["transaction_id"]
-        .as_str()
-        .ok_or("缺少 transaction_id")?;
-    let txn_id = Uuid::parse_str(txn_id_str)
-        .map_err(|_| format!("无效的交易ID: {}", txn_id_str))?;
-
-    transaction::delete_transaction(pool, family_id, txn_id)
-        .await
-        .map_err(|e| format!("删除交易失败: {}", e))?;
-
-    Ok(format!("\n\n✅ 已成功删除交易记录 ({})", &txn_id_str[..8]))
-}
-
-async fn execute_update_transaction(
-    pool: &PgPool,
-    user_id: Uuid,
-    family_id: Uuid,
-    args_json: &str,
-) -> Result<String, String> {
-    let args: serde_json::Value =
-        serde_json::from_str(args_json).map_err(|e| format!("解析参数失败: {}", e))?;
-
-    let txn_id_str = args["transaction_id"]
-        .as_str()
-        .ok_or("缺少 transaction_id")?;
-    let txn_id = Uuid::parse_str(txn_id_str)
-        .map_err(|_| format!("无效的交易ID: {}", txn_id_str))?;
-
-    let existing = transaction::get_transaction(pool, family_id, txn_id)
-        .await
-        .map_err(|e| format!("查询交易失败: {}", e))?;
-
-    let txn_type = args["type"]
-        .as_str()
-        .map(String::from)
-        .unwrap_or(existing.r#type.clone());
-
-    let amount = args["amount"]
-        .as_f64()
-        .map(|v| Decimal::from_str(&format!("{:.2}", v)).unwrap_or(existing.amount))
-        .unwrap_or(existing.amount);
-
-    let date = args["date"]
-        .as_str()
-        .map(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d"))
-        .transpose()
-        .map_err(|_| "日期格式错误".to_string())?
-        .unwrap_or(existing.date);
-
-    let time = args["time"]
-        .as_str()
-        .map(|t| {
-            NaiveTime::parse_from_str(t, "%H:%M:%S")
-                .or_else(|_| NaiveTime::parse_from_str(t, "%H:%M"))
-        })
-        .transpose()
-        .map_err(|_| "时间格式错误".to_string())?
-        .unwrap_or(existing.time);
-
-    let note = args["note"]
-        .as_str()
-        .map(String::from)
-        .or(existing.note.clone());
-
-    let category_id = if let Some(cat_name) = args["category_name"].as_str() {
-        let cat = sqlx::query_as::<_, Category>(
-            "SELECT * FROM categories WHERE name = $1 AND (user_id IS NULL OR family_id = $2) LIMIT 1",
-        )
-        .bind(cat_name)
-        .bind(family_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("查询分类失败: {}", e))?
-        .ok_or_else(|| format!("找不到分类「{}」", cat_name))?;
-        cat.id
-    } else {
-        existing.category_id
-    };
-
-    let subcategory_id = if let Some(sub_name) = args["subcategory_name"].as_str() {
-        let sub = sqlx::query_as::<_, Subcategory>(
-            "SELECT * FROM subcategories WHERE name = $1 AND category_id = $2 LIMIT 1",
-        )
-        .bind(sub_name)
-        .bind(category_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("查询子分类失败: {}", e))?;
-        sub.map(|s| s.id)
-    } else {
-        existing.subcategory_id
-    };
-
-    let req = CreateTransactionRequest {
-        category_id,
-        subcategory_id,
-        r#type: txn_type,
-        amount,
-        currency: existing.currency.clone(),
-        date,
-        time,
-        location: existing.location.clone(),
-        note,
-        members: None,
-    };
-
-    let _ = transaction::update_transaction(pool, user_id, family_id, txn_id, req)
-        .await
-        .map_err(|e| format!("更新交易失败: {}", e))?;
-
-    let mut changes = Vec::new();
-    if args["amount"].is_number() { changes.push(format!("金额→{}", amount)); }
-    if args["category_name"].is_string() { changes.push("分类已更新".to_string()); }
-    if args["date"].is_string() { changes.push(format!("日期→{}", date)); }
-    if args["note"].is_string() { changes.push("备注已更新".to_string()); }
-    if args["type"].is_string() { changes.push(format!("类型→{}", args["type"].as_str().unwrap())); }
-
-    let change_desc = if changes.is_empty() { "无变更".to_string() } else { changes.join("，") };
-    Ok(format!("\n\n✅ 已更新交易记录：{}", change_desc))
-}
-
-async fn execute_get_statistics(
-    pool: &PgPool,
-    family_id: Uuid,
-    args_json: &str,
-) -> Result<String, String> {
-    let args: serde_json::Value =
-        serde_json::from_str(args_json).map_err(|e| format!("解析参数失败: {}", e))?;
-
-    let stat_type = args["stat_type"]
-        .as_str()
-        .ok_or("缺少 stat_type")?;
-    let year = args["year"]
-        .as_i64()
-        .ok_or("缺少 year")? as i32;
-    let month = args["month"].as_i64().map(|m| m as u32);
-    let txn_type = args["type"].as_str();
-
-    match stat_type {
-        "monthly_trend" => {
-            let data = stats::monthly_trend(pool, family_id, year)
-                .await
-                .map_err(|e| format!("查询月度趋势失败: {}", e))?;
-
-            if data.is_empty() {
-                return Ok(format!("{}年暂无收支记录", year));
-            }
-
-            let mut lines = vec![format!("{}年月度收支趋势：", year)];
-            for row in &data {
-                lines.push(format!(
-                    "{}月: 收入 {} / 支出 {} / 结余 {}",
-                    row.month, row.income, row.expense,
-                    row.income - row.expense,
-                ));
-            }
-            let total_income: Decimal = data.iter().map(|r| r.income).sum();
-            let total_expense: Decimal = data.iter().map(|r| r.expense).sum();
-            lines.push(format!(
-                "\n年度合计: 收入 {} / 支出 {} / 结余 {}",
-                total_income, total_expense, total_income - total_expense,
-            ));
-            Ok(lines.join("\n"))
-        }
-        "category_breakdown" => {
-            let data = stats::category_breakdown(pool, family_id, year, month, txn_type)
-                .await
-                .map_err(|e| format!("查询分类占比失败: {}", e))?;
-
-            if data.is_empty() {
-                let period = month.map(|m| format!("{}年{}月", year, m)).unwrap_or(format!("{}年", year));
-                return Ok(format!("{}暂无{}数据", period, txn_type.unwrap_or("支出")));
-            }
-
-            let period = month.map(|m| format!("{}年{}月", year, m)).unwrap_or(format!("{}年", year));
-            let type_label = if txn_type == Some("income") { "收入" } else { "支出" };
-            let mut lines = vec![format!("{} {} 分类占比：", period, type_label)];
-            for row in &data {
-                lines.push(format!(
-                    "{} {}: {} ({:.1}%)",
-                    row.icon, row.category_name, row.total, row.percentage,
-                ));
-            }
-            Ok(lines.join("\n"))
-        }
-        "member_breakdown" => {
-            let data = stats::member_breakdown(pool, family_id, year, month, txn_type)
-                .await
-                .map_err(|e| format!("查询成员消费失败: {}", e))?;
-
-            if data.is_empty() {
-                let period = month.map(|m| format!("{}年{}月", year, m)).unwrap_or(format!("{}年", year));
-                return Ok(format!("{}暂无成员消费数据", period));
-            }
-
-            let period = month.map(|m| format!("{}年{}月", year, m)).unwrap_or(format!("{}年", year));
-            let mut lines = vec![format!("{} 成员消费分析：", period)];
-            for row in &data {
-                lines.push(format!("{}: {}", row.member_name, row.total));
-            }
-            Ok(lines.join("\n"))
-        }
-        _ => Err(format!("不支持的统计类型: {}", stat_type)),
-    }
-}
-
-async fn execute_create_social_gift(
-    pool: &PgPool,
-    user_id: Uuid,
-    family_id: Uuid,
-    args_json: &str,
-) -> Result<String, String> {
-    let args: serde_json::Value =
-        serde_json::from_str(args_json).map_err(|e| format!("解析参数失败: {}", e))?;
-
-    let gift_type = args["type"]
-        .as_str()
-        .ok_or("缺少 type（given/received）")?
-        .to_string();
-    let person_name = args["person_name"]
-        .as_str()
-        .ok_or("缺少 person_name")?
-        .to_string();
-    let occasion = args["occasion"]
-        .as_str()
-        .ok_or("缺少 occasion")?
-        .to_string();
-    let amount = args["amount"]
-        .as_f64()
-        .ok_or("缺少 amount")?;
-    let date_str = args["date"]
-        .as_str()
-        .ok_or("缺少 date")?;
-    let relation = args["relation"].as_str().map(String::from);
-    let note = args["note"].as_str().map(String::from);
-
-    let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-        .map_err(|_| format!("日期格式错误: {}", date_str))?;
-    let amount_decimal = Decimal::from_str(&format!("{:.2}", amount))
-        .map_err(|_| format!("金额格式错误: {}", amount))?;
-
-    let req = CreateSocialGiftRequest {
-        r#type: gift_type.clone(),
-        person_name: person_name.clone(),
-        relation,
-        occasion: occasion.clone(),
-        amount: amount_decimal,
-        currency: "CNY".to_string(),
-        date,
-        note,
-    };
-
-    social_gift::create_social_gift(pool, user_id, family_id, req)
-        .await
-        .map_err(|e| format!("记录人情往来失败: {}", e))?;
-
-    let type_label = if gift_type == "given" { "送出" } else { "收到" };
-    Ok(format!(
-        "\n\n✅ 人情记录成功！\n{} {} {:.2} CNY\n对方: {}\n事由: {}\n日期: {}",
-        type_label, person_name, amount, person_name, occasion, date_str,
-    ))
-}
-
-async fn execute_query_social_gifts(
-    pool: &PgPool,
-    family_id: Uuid,
-    args_json: &str,
-) -> Result<String, String> {
-    let args: serde_json::Value =
-        serde_json::from_str(args_json).map_err(|e| format!("解析参数失败: {}", e))?;
-
-    let start_date_str = args["start_date"]
-        .as_str()
-        .ok_or("缺少 start_date")?;
-    let end_date_str = args["end_date"]
-        .as_str()
-        .ok_or("缺少 end_date")?;
-
-    let start_date = NaiveDate::parse_from_str(start_date_str, "%Y-%m-%d")
-        .map_err(|_| format!("起始日期格式错误: {}", start_date_str))?;
-    let _end_date = NaiveDate::parse_from_str(end_date_str, "%Y-%m-%d")
-        .map_err(|_| format!("结束日期格式错误: {}", end_date_str))?;
-
-    let person_name = args["person_name"].as_str().map(String::from);
-    let gift_type = args["type"].as_str().map(String::from);
-
-    let filter = SocialGiftFilter {
-        r#type: gift_type,
-        person_name: person_name.clone(),
-        year: Some(start_date.year()),
-        page: Some(1),
-        per_page: Some(100),
-    };
-
-    let result = social_gift::list_social_gifts(pool, family_id, filter)
-        .await
-        .map_err(|e| format!("查询人情往来失败: {}", e))?;
-
-    let mut total_given = Decimal::ZERO;
-    let mut total_received = Decimal::ZERO;
-    let mut lines = Vec::new();
-
-    for gift in &result.data {
-        if gift.r#type == "given" {
-            total_given += gift.amount;
-        } else {
-            total_received += gift.amount;
-        }
-        let type_mark = if gift.r#type == "given" { "送→" } else { "收←" };
-        let note_part = gift.note.as_deref().unwrap_or("");
-        lines.push(format!(
-            "{} {} {} {:.2} {} | {} | {}",
-            gift.date.format("%Y-%m-%d"),
-            type_mark,
-            gift.person_name,
-            gift.amount,
-            gift.currency,
-            gift.occasion,
-            note_part,
-        ));
-    }
-
-    let person_label = person_name
-        .map(|n| format!("（筛选: {}）", n))
-        .unwrap_or_default();
-
-    let summary = format!(
-        "人情往来记录{}:\n总计 {} 条\n送出合计: {:.2} CNY\n收到合计: {:.2} CNY\n净额: {:.2} CNY\n\n明细:\n{}",
-        person_label,
-        result.total,
-        total_given,
-        total_received,
-        total_received - total_given,
-        if lines.is_empty() { "无记录".to_string() } else { lines.join("\n") },
-    );
-
-    Ok(summary)
 }
 
 // ── AI financial report (single-shot streaming, no tools) ────────────
@@ -1967,24 +1161,27 @@ pub async fn report_stream(
     ]);
 
     let stream = async_stream::stream! {
-        let client = reqwest::Client::new();
-        let request_body = serde_json::json!({
+        let client = match llm_client() {
+            Ok(c) => c,
+            Err(e) => {
+                yield Ok(Event::default().event("error").data(format!("创建请求客户端失败: {e}")));
+                return;
+            }
+        };
+        let request_body = json!({
             "model": model_name,
             "messages": messages,
             "stream": true,
         });
 
-        let response = match client
-            .post(&api_url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await
-        {
+        let mut request = client.post(&api_url).header("Content-Type", "application/json");
+        if !api_key.is_empty() {
+            request = request.bearer_auth(&api_key);
+        }
+        let response = match request.json(&request_body).send().await {
             Ok(r) => r,
             Err(e) => {
-                yield Ok(Event::default().event("error").data(format!("LLM 请求失败: {}", e)));
+                yield Ok(Event::default().event("error").data(format!("LLM 请求失败: {}", describe_request_error(&e))));
                 return;
             }
         };
@@ -1995,38 +1192,51 @@ pub async fn report_stream(
             return;
         }
 
-        let mut byte_stream = response.bytes_stream();
-        let mut buffer = String::new();
-        let mut thinking_phase = false;
+        let mut body = response.bytes_stream();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut thinking = false;
+        let mut finished = false;
 
-        while let Some(chunk) = byte_stream.next().await {
-            match chunk {
-                Ok(bytes) => {
-                    buffer.push_str(&String::from_utf8_lossy(&bytes));
-                    while let Some(pos) = buffer.find('\n') {
-                        let line = buffer[..pos].trim().to_string();
-                        buffer = buffer[pos + 1..].to_string();
-                        if line.is_empty() { continue; }
-                        if line == "data: [DONE]" { break; }
-                        if let Some(data) = line.strip_prefix("data: ") {
-                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
-                                let delta = &parsed["choices"][0]["delta"];
-                                let reasoning = delta["reasoning_content"].as_str().unwrap_or("");
-                                let content_text = delta["content"].as_str().unwrap_or("");
-                                if !reasoning.is_empty() { thinking_phase = true; }
-                                if thinking_phase && reasoning.is_empty() && !content_text.is_empty() {
-                                    thinking_phase = false;
-                                }
-                                if !content_text.is_empty() && !thinking_phase {
-                                    yield Ok(Event::default().data(content_text));
-                                }
-                            }
-                        }
-                    }
+        while !finished {
+            let lines = match body.next().await {
+                Some(Ok(chunk)) => {
+                    buf.extend_from_slice(&chunk);
+                    take_lines(&mut buf)
                 }
-                Err(e) => {
-                    yield Ok(Event::default().event("error").data(e.to_string()));
+                Some(Err(e)) => {
+                    yield Ok(Event::default().event("error").data(describe_request_error(&e)));
                     break;
+                }
+                None => {
+                    finished = true;
+                    take_rest(&mut buf)
+                }
+            };
+            for line in lines {
+                let Some(data) = sse_data(&line) else { continue };
+                if data == "[DONE]" {
+                    finished = true;
+                    break;
+                }
+                let Ok(chunk) = serde_json::from_str::<Value>(data) else { continue };
+                if let Some(err) = provider_error(&chunk) {
+                    yield Ok(Event::default().event("error").data(format!("LLM API 错误: {err}")));
+                    finished = true;
+                    break;
+                }
+                let delta = &chunk["choices"][0]["delta"];
+                let reasoning = delta["reasoning_content"]
+                    .as_str()
+                    .or_else(|| delta["reasoning"].as_str())
+                    .unwrap_or("");
+                let text = delta["content"].as_str().unwrap_or("");
+                if !reasoning.is_empty() {
+                    thinking = true;
+                } else if thinking && !text.is_empty() {
+                    thinking = false;
+                }
+                if !text.is_empty() && !thinking {
+                    yield Ok(Event::default().data(text));
                 }
             }
         }
@@ -2339,4 +1549,88 @@ fn extract_json_block(text: &str) -> String {
         }
     }
     trimmed.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn take_lines_keeps_utf8_split_across_chunks() {
+        let line = "data: {\"content\":\"人情\"}\n".as_bytes();
+        // Cut inside the 3-byte encoding of 人.
+        let cut = line.iter().position(|&b| b >= 0x80).unwrap() + 1;
+        let mut buf = line[..cut].to_vec();
+        assert!(take_lines(&mut buf).is_empty());
+        buf.extend_from_slice(&line[cut..]);
+        assert_eq!(take_lines(&mut buf), vec!["data: {\"content\":\"人情\"}"]);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn accumulates_streamed_and_whole_tool_calls() {
+        let mut pending = BTreeMap::new();
+        accumulate_tool_calls(
+            &mut pending,
+            &[json!({ "index": 0, "id": "a", "function": { "name": "create_social_gift", "arguments": "{\"amount\"" } })],
+        );
+        accumulate_tool_calls(
+            &mut pending,
+            &[json!({ "index": 0, "function": { "name": "create_social_gift", "arguments": ":500}" } })],
+        );
+        // Provider without `index`, arguments as an object.
+        accumulate_tool_calls(
+            &mut pending,
+            &[
+                json!({ "id": "b", "function": { "name": "query_transactions", "arguments": { "x": 1 } } }),
+                json!({ "function": { "name": "get_statistics", "arguments": "{}" } }),
+            ],
+        );
+        let calls = finalize_tool_calls(pending);
+        let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["create_social_gift", "query_transactions", "get_statistics"]);
+        assert_eq!(calls[0].args, "{\"amount\":500}");
+        assert_eq!(calls[1].args, "{\"x\":1}");
+        assert!(calls[2].id.starts_with("call_"));
+    }
+
+    #[test]
+    fn sanitize_drops_unanswered_tool_calls_and_orphans() {
+        let msgs = vec![
+            json!({ "role": "tool", "tool_call_id": "x", "content": "orphan" }),
+            json!({ "role": "user", "content": "hi" }),
+            json!({ "role": "assistant", "content": "ok", "tool_calls": [{ "id": "a" }, { "id": "b" }] }),
+            json!({ "role": "tool", "tool_call_id": "a", "content": "r" }),
+            json!({ "role": "assistant", "tool_calls": [{ "id": "c" }] }),
+            json!({ "role": "tool", "tool_call_id": "c", "content": "r" }),
+        ];
+        let out = sanitize_tool_pairs(msgs);
+        let roles: Vec<&str> = out.iter().map(|m| m["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, ["user", "assistant", "assistant", "tool"]);
+        assert!(out[1].get("tool_calls").is_none());
+        assert_eq!(out[3]["tool_call_id"], "c");
+    }
+
+    #[test]
+    fn history_folds_turn_into_one_bubble() {
+        let row = |role: &str, content: &str| ChatMessage {
+            id: Uuid::new_v4(),
+            user_id: Uuid::nil(),
+            family_id: Uuid::nil(),
+            role: role.to_string(),
+            content: content.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            created_at: Utc::now(),
+        };
+        let out = fold_for_display(vec![
+            row("user", "送张三红包 500"),
+            row("assistant", ""),
+            row("tool", "\n\n✅ 人情记录成功！\n送出 张三 500.00 CNY\n（记录ID: abc）"),
+            row("tool", "查询结果…"),
+            row("assistant", "已记录"),
+        ]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[1].content, "✅ 人情记录成功！\n送出 张三 500.00 CNY\n\n已记录");
+    }
 }
